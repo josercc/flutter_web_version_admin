@@ -1,16 +1,20 @@
-# flutter_web_version_admin
+# Flutter Web Version Admin
 
-A new Flutter project.
+一个基于 Flutter Web 和 Appwrite 构建的内部热更新版本管理工具，专为管理 Flutter 应用的热更新版本而设计。
 
-## Getting Started
+## 功能特点
+- **版本管理**：轻松创建、发布和管理应用的多个版本
+- **热更新支持**：实现 Flutter 应用的无缝热更新，无需用户重新安装
+- **Appwrite 集成**：利用 Appwrite 后端服务进行数据存储和用户认证
+- **Web 管理界面**：直观的 Web 界面，方便管理员进行版本控制和监控
 
-This project is a starting point for a Flutter application.
+## 技术栈
+- **前端**：Flutter Web
+- **后端**：Appwrite
+- **语言**：Dart
 
-A few resources to get you started if this is your first Flutter project:
+## 使用场景
+内部团队用于管理 Flutter 应用的热更新发布流程，确保用户始终使用最新版本，同时支持版本回滚和发布控制。
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 安装与配置
+详情请参见内部文档或联系开发团队获取部署指南。
