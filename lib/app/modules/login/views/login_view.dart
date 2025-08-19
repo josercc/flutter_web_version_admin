@@ -26,21 +26,13 @@ class LoginView extends GetView<LoginController> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Appwrite 图标
-              SvgPicture.asset(
-                'assets/appwrite-logo.svg', // 需要添加Appwrite SVG图标到assets
-                width: 120,
-                height: 120,
-              ),
-              const SizedBox(height: 40),
-
               // 账号输入框
               TextFormField(
                 controller: _emailController,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   labelText: '账号',
-                  prefixIcon: const Icon(Icons.person),
-                  border: const OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.person),
+                  border: OutlineInputBorder(),
                 ),
                 keyboardType: TextInputType.emailAddress,
                 validator: (value) {

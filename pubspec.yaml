@@ -43,7 +43,9 @@ dependencies:
   flutter_form_builder: ^9.5.0
   easy_dialog: ^1.1.1
   get: ^4.7.2
-  appwrite: ^17.1.0
+  appwrite: 16.1.0
+  shared_preferences: 2.5.3
+  flutter_smart_dialog: 4.9.8+9
 
 dev_dependencies:
   flutter_test:
@@ -65,8 +67,8 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
-  assets:
-    - assets/appwrite-logo.svg
+  # assets:
+    # - assets/appwrite-logo.svg
 
   # To add assets to your application, add an assets section, like this:
   # assets:
