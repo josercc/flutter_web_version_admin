@@ -48,50 +48,30 @@ class AppwriteManager extends GetxService {
   }
 
   /// 更新版本启用状态
-  Future<void> updateVersionEnable({
+  Future<void> updateVersion({
     required String documentId,
-    required bool isEnable,
+    bool? isEnable,
+    List<String>? allowPhones,
+    String? isStore,
   }) async {
+    Map data = {};
+    if (isEnable != null) {
+      data['enable'] = isEnable;
+    }
+    if (allowPhones != null) {
+      data['allow_phones'] = allowPhones;
+    }
+    if (isStore != null) {
+      data['is_store'] = isStore;
+    }
+    if (data.isEmpty) {
+      return;
+    }
     await _databases.updateDocument(
       databaseId: '67f47b11001a83bd8eb1',
       collectionId: '68a340c0002682fb25ba',
       documentId: documentId,
-      data: {
-        'enable': isEnable,
-      },
-    );
-  }
-
-  /// 发布新版本
-  Future<void> publishNewVersion({
-    required String routeName,
-    required Map<String, dynamic> data,
-    bool isFullPublish = false,
-    List<String>? targetPhones,
-  }) async {
-    // 准备发布数据
-    final publishData = {
-      'routeName': routeName,
-      'version': DateTime.now().millisecondsSinceEpoch,
-      'enable': true,
-      'is_store': isFullPublish,
-      ...data,
-    };
-
-    // 如果是全量发布，清空allow_phones字段
-    if (isFullPublish) {
-      publishData['allow_phones'] = [];
-    } 
-    // 如果是针对性发布，设置目标手机号
-    else if (targetPhones != null && targetPhones.isNotEmpty) {
-      publishData['allow_phones'] = targetPhones;
-    }
-
-    await _databases.createDocument(
-      databaseId: '67f47b11001a83bd8eb1',
-      collectionId: '68a340c0002682fb25ba',
-      documentId: ID.unique(),
-      data: publishData,
+      data: data,
     );
   }
 }

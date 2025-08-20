@@ -21,53 +21,32 @@ class HomeController extends GetxController {
   }
 
   /// 更新版本启用状态
-  void updateEnable(int index, bool value) {
+  void updateVersion(
+    int index, {
+    bool? enable,
+    List<String>? allowPhones,
+    String? isStore,
+  }) {
     final document = versionList[index];
     _appwriteManager
-        .updateVersionEnable(
+        .updateVersion(
       documentId: document.$id,
-      isEnable: value,
+      isEnable: enable,
+      allowPhones: allowPhones,
+      isStore: isStore,
     )
         .then((_) {
-      // 更新本地状态
-      versionList[index].data['enable'] = value;
+      if (enable != null) {
+        versionList[index].data['enable'] = enable;
+      } else if (allowPhones != null) {
+        versionList[index].data['allow_phones'] = allowPhones;
+      } else if (isStore != null) {
+        versionList[index].data['is_store'] = isStore;
+      }
       versionList.refresh();
       Get.snackbar('成功', '版本状态已更新');
     }).catchError((error) {
       Get.snackbar('失败', '更新版本状态出错: $error');
-    });
-  }
-
-  /// 全量发布 - 清空allow_phones字段
-  void fullPublish(String routeName) {
-    _appwriteManager
-        .publishNewVersion(
-      routeName: routeName,
-      data: {'description': '全量发布的版本'}, // 可以添加其他描述信息
-      isFullPublish: true,
-    )
-        .then((_) {
-      fetchVersionList();
-      Get.snackbar('成功', '版本已全量发布');
-    }).catchError((error) {
-      Get.snackbar('失败', '发布版本出错: $error');
-    });
-  }
-
-  /// 针对性发布 - 针对特定手机号
-  void targetedPublish(String routeName, List<String> targetPhones) {
-    _appwriteManager
-        .publishNewVersion(
-      routeName: routeName,
-      data: {'description': '针对性发布的版本'}, // 可以添加其他描述信息
-      isFullPublish: false,
-      targetPhones: targetPhones,
-    )
-        .then((_) {
-      fetchVersionList();
-      Get.snackbar('成功', '版本已针对性发布');
-    }).catchError((error) {
-      Get.snackbar('失败', '发布版本出错: $error');
     });
   }
 
@@ -103,7 +82,7 @@ class HomeController extends GetxController {
   String getEnvironmentType(Document document) {
     final isEnable = document.data['enable'] ?? false;
     final isStore = document.data['is_store'] ?? false;
-    
+
     if (!isEnable) {
       return '未发布';
     } else if (isStore) {
@@ -117,7 +96,7 @@ class HomeController extends GetxController {
   Color getEnvironmentColor(Document document) {
     final isEnable = document.data['enable'] ?? false;
     final isStore = document.data['is_store'] ?? false;
-    
+
     if (!isEnable) {
       return Colors.grey;
     } else if (isStore) {
@@ -130,7 +109,7 @@ class HomeController extends GetxController {
   /// 获取卡片背景色
   Color getCardBackgroundColor(Document document) {
     final color = getEnvironmentColor(document);
-    
+
     if (color == Colors.grey) {
       return Colors.grey.shade100;
     } else if (color == Colors.green) {
@@ -138,38 +117,5 @@ class HomeController extends GetxController {
     } else {
       return Colors.blue.shade50;
     }
-  }
-
-  /// 测试环境发布 - 针对特定手机号
-  void publishToTestEnvironment(String routeName, List<String> targetPhones) {
-    _appwriteManager
-        .publishNewVersion(
-      routeName: routeName,
-      data: {'description': '测试环境发布的版本'},
-      isFullPublish: false,
-      targetPhones: targetPhones,
-    )
-        .then((_) {
-      fetchVersionList();
-      Get.snackbar('成功', '版本已发布到测试环境');
-    }).catchError((error) {
-      Get.snackbar('失败', '发布版本出错: $error');
-    });
-  }
-
-  /// 正式环境发布 - 全量发布
-  void publishToProductionEnvironment(String routeName) {
-    _appwriteManager
-        .publishNewVersion(
-      routeName: routeName,
-      data: {'description': '正式环境全量发布的版本'},
-      isFullPublish: true,
-    )
-        .then((_) {
-      fetchVersionList();
-      Get.snackbar('成功', '版本已发布到正式环境');
-    }).catchError((error) {
-      Get.snackbar('失败', '发布版本出错: $error');
-    });
   }
 }
