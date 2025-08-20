@@ -37,13 +37,46 @@ class AppwriteManager extends GetxService {
   }
 
   /// 查询当前热更的版本列表
-  Future<DocumentList> getVersionList() async {
+  Future<DocumentList> getVersionList({
+    int limit = 25,
+    String? offset,
+    Map<String, dynamic>? filters,
+  }) async {
+    List<String> queries = [
+      Query.orderDesc('version'),
+      Query.limit(limit),
+    ];
+
+    // 添加分页偏移
+    if (offset != null && offset.isNotEmpty) {
+      queries.add(Query.cursorAfter(offset));
+    }
+
+    // 添加筛选条件
+    if (filters != null && filters.isNotEmpty) {
+      if (filters.containsKey('routeName') && filters['routeName'].isNotEmpty) {
+        queries.add(Query.search('routeName', filters['routeName']));
+      }
+      
+      if (filters.containsKey('phoneNumber') && filters['phoneNumber'].isNotEmpty) {
+        queries.add(Query.search('allow_phones', filters['phoneNumber']));
+      }
+      
+      if (filters.containsKey('onlineStatus') && filters['onlineStatus'] != '全部') {
+        bool isOnline = filters['onlineStatus'] == '已上线';
+        queries.add(Query.equal('enable', isOnline));
+      }
+      
+      if (filters.containsKey('environment') && filters['environment'] != '全部') {
+        bool isTestEnv = filters['environment'] == '测试环境';
+        queries.add(Query.equal('is_test_environment', isTestEnv));
+      }
+    }
+
     return await _databases.listDocuments(
       databaseId: '67f47b11001a83bd8eb1',
       collectionId: '68a340c0002682fb25ba',
-      queries: [
-        Query.orderDesc('version'),
-      ],
+      queries: queries,
     );
   }
 
@@ -52,7 +85,7 @@ class AppwriteManager extends GetxService {
     required String documentId,
     bool? isEnable,
     List<String>? allowPhones,
-    dynamic isStore, // 改为dynamic以支持String和bool类型
+    bool? isStore,
   }) async {
     Map data = {};
     if (isEnable != null) {
@@ -62,12 +95,7 @@ class AppwriteManager extends GetxService {
       data['allow_phones'] = allowPhones;
     }
     if (isStore != null) {
-      // 处理不同类型的isStore参数
-      if (isStore is String) {
-        data['is_store'] = isStore == 'true';
-      } else if (isStore is bool) {
-        data['is_store'] = isStore;
-      }
+      data['is_store'] = isStore;
     }
     if (data.isEmpty) {
       return;

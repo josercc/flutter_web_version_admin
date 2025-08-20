@@ -6,18 +6,127 @@ import 'package:get/get.dart';
 class HomeController extends GetxController {
   final versionList = <Document>[].obs;
   final AppwriteManager _appwriteManager = Get.find<AppwriteManager>();
+  final isLoading = false.obs;
+  
+  // 分页相关
+  final isLoadingMore = false.obs;
+  final hasMore = true.obs;
+  String? lastDocumentId;
+  final int pageSize = 20; // 每页加载数量
+  
+  // 筛选相关
+  final isFiltering = false.obs;
+  Map<String, dynamic> currentFilters = {};
 
   @override
   void onReady() {
     super.onReady();
-    fetchVersionList();
+    loadAllVersions();
   }
 
-  /// 获取版本列表
+  /// 加载版本列表（首次加载或刷新）
+  Future<void> loadAllVersions({bool refresh = false}) async {
+    if (refresh) {
+      // 刷新时重置分页状态
+      lastDocumentId = null;
+      hasMore.value = true;
+      versionList.clear();
+    }
+    
+    if (isLoading.value) return;
+    
+    try {
+      isLoading.value = true;
+      final result = await _appwriteManager.getVersionList(
+        limit: pageSize,
+        offset: lastDocumentId,
+        filters: currentFilters,
+      );
+      
+      if (refresh) {
+        versionList.assignAll(result.documents);
+      } else {
+        versionList.addAll(result.documents);
+      }
+      
+      // 更新分页状态
+      if (result.documents.length < pageSize) {
+        hasMore.value = false;
+      } else {
+        hasMore.value = true;
+        if (result.documents.isNotEmpty) {
+          lastDocumentId = result.documents.last.$id;
+        }
+      }
+      
+    } catch (error) {
+      Get.snackbar('错误', '加载版本列表失败: $error');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  /// 加载更多版本
+  Future<void> loadMoreVersions() async {
+    if (!hasMore.value || isLoadingMore.value || isLoading.value) return;
+    
+    try {
+      isLoadingMore.value = true;
+      final result = await _appwriteManager.getVersionList(
+        limit: pageSize,
+        offset: lastDocumentId,
+        filters: currentFilters,
+      );
+      
+      versionList.addAll(result.documents);
+      
+      // 更新分页状态
+      if (result.documents.length < pageSize) {
+        hasMore.value = false;
+      } else {
+        if (result.documents.isNotEmpty) {
+          lastDocumentId = result.documents.last.$id;
+        }
+      }
+      
+    } catch (error) {
+      Get.snackbar('错误', '加载更多失败: $error');
+    } finally {
+      isLoadingMore.value = false;
+    }
+  }
+
+  /// 刷新版本列表
+  Future<void> refreshVersions() async {
+    await loadAllVersions(refresh: true);
+  }
+
+  /// 根据条件筛选版本列表
+  Future<void> filterVersions(Map<String, dynamic> filters) async {
+    try {
+      currentFilters = filters;
+      isFiltering.value = filters.isNotEmpty;
+      
+      // 重新加载数据
+      await loadAllVersions(refresh: true);
+    } catch (error) {
+      Get.snackbar('错误', '筛选版本列表失败: $error');
+      rethrow;
+    }
+  }
+
+  /// 清空筛选条件
+  Future<void> clearFilters() async {
+    currentFilters.clear();
+    isFiltering.value = false;
+    
+    // 重新加载数据
+    await loadAllVersions(refresh: true);
+  }
+
+  /// 获取版本列表（兼容旧方法名）
   void fetchVersionList() {
-    _appwriteManager.getVersionList().then((value) {
-      versionList.value = value.documents;
-    });
+    loadAllVersions();
   }
 
   /// 更新版本启用状态
@@ -25,7 +134,7 @@ class HomeController extends GetxController {
     int index, {
     bool? enable,
     List<String>? allowPhones,
-    String? isStore,
+    bool? isStore,
   }) {
     final document = versionList[index];
     _appwriteManager
@@ -38,13 +147,19 @@ class HomeController extends GetxController {
         .then((_) {
       if (enable != null) {
         versionList[index].data['enable'] = enable;
-      } else if (allowPhones != null) {
+      }
+      if (allowPhones != null) {
         versionList[index].data['allow_phones'] = allowPhones;
-      } else if (isStore != null) {
+      }
+      if (isStore != null) {
         versionList[index].data['is_store'] = isStore;
       }
       versionList.refresh();
-      Get.snackbar('成功', '版本状态已更新');
+      
+      // 只在enable状态变更时显示成功提示
+      if (enable != null) {
+        Get.snackbar('成功', '版本状态已更新');
+      }
     }).catchError((error) {
       Get.snackbar('失败', '更新版本状态出错: $error');
     });
@@ -155,5 +270,32 @@ class HomeController extends GetxController {
     }).catchError((error) {
       Get.snackbar('失败', '切换指定手机号模式失败: $error');
     });
+  }
+
+  /// 更新版本环境状态
+  Future<void> updateVersionEnvironment(
+    int index, {
+    required bool isTestEnvironment,
+  }) async {
+    final document = versionList[index];
+    
+    try {
+      // 根据环境类型设置 is_store 值
+      // 测试环境：is_store = false
+      // 正式环境：is_store = true
+      final newIsStore = !isTestEnvironment;
+      
+      await _appwriteManager.updateVersion(
+        documentId: document.$id,
+        isStore: newIsStore,
+      );
+      
+      // 更新本地数据
+      versionList[index].data['is_store'] = newIsStore;
+      
+      versionList.refresh();
+    } catch (error) {
+      throw Exception('更新版本环境失败: $error');
+    }
   }
 }

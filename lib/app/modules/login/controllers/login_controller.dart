@@ -1,5 +1,3 @@
-import 'package:appwrite/appwrite.dart';
-import 'package:easy_dialog/easy_dialog.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_web_version_admin/app/commons/appwrite_manager.dart';
 import 'package:get/get.dart';

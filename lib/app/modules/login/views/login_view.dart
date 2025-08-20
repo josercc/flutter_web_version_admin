@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:appwrite/appwrite.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 import '../controllers/login_controller.dart';
 
