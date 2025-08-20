@@ -118,4 +118,42 @@ class HomeController extends GetxController {
       return Colors.blue.shade50;
     }
   }
+
+  /// 切换到全量模式（清空手机号列表）
+  void switchToFullMode(int index) {
+    final document = versionList[index];
+    _appwriteManager
+        .updateVersion(
+      documentId: document.$id,
+      allowPhones: [], // 清空手机号列表
+      isStore: true, // 设置为全量发布
+    )
+        .then((_) {
+      // 更新本地数据
+      versionList[index].data['allow_phones'] = [];
+      versionList[index].data['is_store'] = true;
+      versionList.refresh();
+      Get.snackbar('成功', '已切换到全量模式，手机号列表已清空');
+    }).catchError((error) {
+      Get.snackbar('失败', '切换全量模式失败: $error');
+    });
+  }
+
+  /// 切换到指定手机号模式
+  void switchToTargetMode(int index) {
+    final document = versionList[index];
+    _appwriteManager
+        .updateVersion(
+      documentId: document.$id,
+      isStore: false, // 设置为指定发布
+    )
+        .then((_) {
+      // 更新本地数据
+      versionList[index].data['is_store'] = false;
+      versionList.refresh();
+      Get.snackbar('成功', '已切换到指定手机号模式');
+    }).catchError((error) {
+      Get.snackbar('失败', '切换指定手机号模式失败: $error');
+    });
+  }
 }

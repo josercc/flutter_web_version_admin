@@ -52,7 +52,7 @@ class AppwriteManager extends GetxService {
     required String documentId,
     bool? isEnable,
     List<String>? allowPhones,
-    String? isStore,
+    dynamic isStore, // 改为dynamic以支持String和bool类型
   }) async {
     Map data = {};
     if (isEnable != null) {
@@ -62,7 +62,12 @@ class AppwriteManager extends GetxService {
       data['allow_phones'] = allowPhones;
     }
     if (isStore != null) {
-      data['is_store'] = isStore;
+      // 处理不同类型的isStore参数
+      if (isStore is String) {
+        data['is_store'] = isStore == 'true';
+      } else if (isStore is bool) {
+        data['is_store'] = isStore;
+      }
     }
     if (data.isEmpty) {
       return;
