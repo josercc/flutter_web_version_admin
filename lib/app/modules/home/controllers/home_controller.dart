@@ -8,11 +8,11 @@ class HomeController extends GetxController {
   final AppwriteManager _appwriteManager = Get.find<AppwriteManager>();
   final isLoading = false.obs;
   
-  // 分页相关
-  final isLoadingMore = false.obs;
-  final hasMore = true.obs;
-  String? lastDocumentId;
-  final int pageSize = 20; // 每页加载数量
+  // 页码相关
+  final currentPage = 1.obs;
+  final totalPages = 1.obs;
+  final totalCount = 0.obs;
+  final int pageSize = 20; // 每页20条数据
   
   // 筛选相关
   final isFiltering = false.obs;
@@ -21,113 +21,98 @@ class HomeController extends GetxController {
   @override
   void onReady() {
     super.onReady();
-    loadAllVersions();
+    loadVersionsByPage(1, pageSize, {});
   }
 
-  /// 加载版本列表（首次加载或刷新）
-  Future<void> loadAllVersions({bool refresh = false}) async {
-    if (refresh) {
-      // 刷新时重置分页状态
-      lastDocumentId = null;
-      hasMore.value = true;
-      versionList.clear();
-    }
-    
+  /// 根据页码加载版本列表
+  Future<void> loadVersionsByPage(int page, int limit, Map<String, dynamic> filters) async {
     if (isLoading.value) return;
     
     try {
       isLoading.value = true;
-      final result = await _appwriteManager.getVersionList(
-        limit: pageSize,
-        offset: lastDocumentId,
-        filters: currentFilters,
-      );
+      currentFilters = filters;
       
-      if (refresh) {
-        versionList.assignAll(result.documents);
-      } else {
-        versionList.addAll(result.documents);
-      }
+      // 检查是否有手机号筛选
+      final hasPhoneFilter = filters.containsKey('phoneNumber') && 
+                            filters['phoneNumber'].isNotEmpty;
       
-      // 更新分页状态
-      if (result.documents.length < pageSize) {
-        hasMore.value = false;
+      if (hasPhoneFilter) {
+        // 有手机号筛选时，获取所有数据进行客户端筛选
+        await _loadWithPhoneFilter(page, limit, filters);
       } else {
-        hasMore.value = true;
-        if (result.documents.isNotEmpty) {
-          lastDocumentId = result.documents.last.$id;
-        }
+        // 没有手机号筛选时，使用正常的服务器分页
+        await _loadWithServerPaging(page, limit, filters);
       }
       
     } catch (error) {
       Get.snackbar('错误', '加载版本列表失败: $error');
+      rethrow;
     } finally {
       isLoading.value = false;
     }
   }
 
-  /// 加载更多版本
-  Future<void> loadMoreVersions() async {
-    if (!hasMore.value || isLoadingMore.value || isLoading.value) return;
+  /// 使用服务器分页加载数据
+  Future<void> _loadWithServerPaging(int page, int limit, Map<String, dynamic> filters) async {
+    final result = await _appwriteManager.getVersionListByPage(
+      page: page,
+      limit: limit,
+      filters: filters,
+    );
     
-    try {
-      isLoadingMore.value = true;
-      final result = await _appwriteManager.getVersionList(
-        limit: pageSize,
-        offset: lastDocumentId,
-        filters: currentFilters,
-      );
+    versionList.assignAll(result.documents);
+    currentPage.value = page;
+    totalCount.value = result.total;
+    totalPages.value = result.total > 0 ? (result.total / limit).ceil() : 1;
+  }
+
+  /// 使用客户端筛选加载数据（用于手机号筛选）
+  Future<void> _loadWithPhoneFilter(int page, int limit, Map<String, dynamic> filters) async {
+    final phoneNumber = filters['phoneNumber'].toString().trim();
+    
+    // 获取所有符合其他条件的数据
+    final result = await _appwriteManager.getAllVersionsForFiltering(filters: filters);
+    
+    // 在客户端进行手机号筛选
+    final filteredDocuments = result.documents.where((doc) {
+      final allowPhones = (doc.data['allow_phones'] as List<dynamic>? ?? []);
       
-      versionList.addAll(result.documents);
-      
-      // 更新分页状态
-      if (result.documents.length < pageSize) {
-        hasMore.value = false;
-      } else {
-        if (result.documents.isNotEmpty) {
-          lastDocumentId = result.documents.last.$id;
-        }
+      // 如果手机号列表为空，包含在结果中
+      if (allowPhones.isEmpty) {
+        return true;
       }
       
-    } catch (error) {
-      Get.snackbar('错误', '加载更多失败: $error');
-    } finally {
-      isLoadingMore.value = false;
-    }
-  }
-
-  /// 刷新版本列表
-  Future<void> refreshVersions() async {
-    await loadAllVersions(refresh: true);
-  }
-
-  /// 根据条件筛选版本列表
-  Future<void> filterVersions(Map<String, dynamic> filters) async {
-    try {
-      currentFilters = filters;
-      isFiltering.value = filters.isNotEmpty;
-      
-      // 重新加载数据
-      await loadAllVersions(refresh: true);
-    } catch (error) {
-      Get.snackbar('错误', '筛选版本列表失败: $error');
-      rethrow;
-    }
-  }
-
-  /// 清空筛选条件
-  Future<void> clearFilters() async {
-    currentFilters.clear();
-    isFiltering.value = false;
+      // 检查手机号列表是否包含筛选的手机号（支持部分匹配）
+      return allowPhones.any((phone) => 
+        phone.toString().contains(phoneNumber));
+    }).toList();
     
-    // 重新加载数据
-    await loadAllVersions(refresh: true);
+    // 对筛选后的结果进行分页
+    final totalFiltered = filteredDocuments.length;
+    final startIndex = (page - 1) * limit;
+    final endIndex = startIndex + limit;
+    
+    List<Document> pageDocuments = [];
+    if (startIndex < totalFiltered) {
+      pageDocuments = filteredDocuments.sublist(
+        startIndex, 
+        endIndex > totalFiltered ? totalFiltered : endIndex
+      );
+    }
+    
+    // 更新数据
+    versionList.assignAll(pageDocuments);
+    currentPage.value = page;
+    totalCount.value = totalFiltered;
+    totalPages.value = totalFiltered > 0 ? (totalFiltered / limit).ceil() : 1;
   }
 
-  /// 获取版本列表（兼容旧方法名）
-  void fetchVersionList() {
-    loadAllVersions();
+  /// 刷新当前页数据
+  Future<void> refreshVersions() async {
+    await loadVersionsByPage(currentPage.value, pageSize, currentFilters);
   }
+
+
 
   /// 更新版本启用状态
   void updateVersion(

@@ -52,15 +52,51 @@ class AppwriteManager extends GetxService {
       queries.add(Query.cursorAfter(offset));
     }
 
-    // 添加筛选条件
+    // 添加筛选条件（不包括手机号筛选，因为数组字段不支持搜索）
     if (filters != null && filters.isNotEmpty) {
       if (filters.containsKey('routeName') && filters['routeName'].isNotEmpty) {
         queries.add(Query.search('routeName', filters['routeName']));
       }
       
-      if (filters.containsKey('phoneNumber') && filters['phoneNumber'].isNotEmpty) {
-        queries.add(Query.search('allow_phones', filters['phoneNumber']));
+      // 手机号筛选在客户端处理，这里跳过
+      
+      if (filters.containsKey('onlineStatus') && filters['onlineStatus'] != '全部') {
+        bool isOnline = filters['onlineStatus'] == '已上线';
+        queries.add(Query.equal('enable', isOnline));
       }
+      
+      if (filters.containsKey('environment') && filters['environment'] != '全部') {
+        bool isTestEnv = filters['environment'] == '测试环境';
+        queries.add(Query.equal('is_test_environment', isTestEnv));
+      }
+    }
+
+    return await _databases.listDocuments(
+      databaseId: '67f47b11001a83bd8eb1',
+      collectionId: '68a340c0002682fb25ba',
+      queries: queries,
+    );
+  }
+
+  /// 根据页码查询版本列表
+  Future<DocumentList> getVersionListByPage({
+    required int page,
+    required int limit,
+    Map<String, dynamic>? filters,
+  }) async {
+    List<String> queries = [
+      Query.orderDesc('version'),
+      Query.limit(limit),
+      Query.offset((page - 1) * limit), // 计算偏移量
+    ];
+
+    // 添加筛选条件（不包括手机号筛选，因为数组字段不支持搜索）
+    if (filters != null && filters.isNotEmpty) {
+      if (filters.containsKey('routeName') && filters['routeName'].isNotEmpty) {
+        queries.add(Query.search('routeName', filters['routeName']));
+      }
+      
+      // 手机号筛选在客户端处理，这里跳过
       
       if (filters.containsKey('onlineStatus') && filters['onlineStatus'] != '全部') {
         bool isOnline = filters['onlineStatus'] == '已上线';
@@ -105,6 +141,39 @@ class AppwriteManager extends GetxService {
       collectionId: '68a340c0002682fb25ba',
       documentId: documentId,
       data: data,
+    );
+  }
+
+  /// 获取所有版本数据用于客户端筛选（当需要手机号筛选时使用）
+  Future<DocumentList> getAllVersionsForFiltering({
+    Map<String, dynamic>? filters,
+  }) async {
+    List<String> queries = [
+      Query.orderDesc('version'),
+      Query.limit(1000), // 获取大量数据用于客户端筛选
+    ];
+
+    // 添加非手机号的筛选条件
+    if (filters != null && filters.isNotEmpty) {
+      if (filters.containsKey('routeName') && filters['routeName'].isNotEmpty) {
+        queries.add(Query.search('routeName', filters['routeName']));
+      }
+      
+      if (filters.containsKey('onlineStatus') && filters['onlineStatus'] != '全部') {
+        bool isOnline = filters['onlineStatus'] == '已上线';
+        queries.add(Query.equal('enable', isOnline));
+      }
+      
+      if (filters.containsKey('environment') && filters['environment'] != '全部') {
+        bool isTestEnv = filters['environment'] == '测试环境';
+        queries.add(Query.equal('is_test_environment', isTestEnv));
+      }
+    }
+
+    return await _databases.listDocuments(
+      databaseId: '67f47b11001a83bd8eb1',
+      collectionId: '68a340c0002682fb25ba',
+      queries: queries,
     );
   }
 }

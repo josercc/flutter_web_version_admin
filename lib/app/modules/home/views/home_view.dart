@@ -20,8 +20,8 @@ class HomeViewState extends State<HomeView> {
   final Map<int, bool> _isFullPublish = {};
   final Map<int, bool> _isTestEnvironment = {}; // 每个版本独立的环境状态
 
-  // 滚动控制器，用于监听滚动事件
-  final ScrollController _scrollController = ScrollController();
+  // 页码控制器
+  final TextEditingController _pageController = TextEditingController(text: '1');
 
   // 筛选相关状态
   bool _showFilters = false;
@@ -37,8 +37,8 @@ class HomeViewState extends State<HomeView> {
   @override
   void initState() {
     super.initState();
-    // 添加滚动监听器
-    _scrollController.addListener(_onScroll);
+    // 初始化页码为1
+    _pageController.text = '1';
   }
 
   @override
@@ -46,18 +46,84 @@ class HomeViewState extends State<HomeView> {
     _phoneController.dispose();
     _routeNameFilter.dispose();
     _phoneNumberFilter.dispose();
-    _scrollController.dispose(); // 释放滚动控制器
+    _pageController.dispose(); // 释放页码控制器
     super.dispose();
   }
 
-  // 滚动监听方法
-  void _onScroll() {
-    if (_scrollController.position.pixels >= 
-        _scrollController.position.maxScrollExtent - 200) {
-      // 距离底部200像素时开始加载更多
+
+
+  // 页码刷新方法
+  Future<void> _loadPageData(int page) async {
+    setState(() {
+      _isFiltering = true;
+    });
+
+    try {
       final controller = Get.find<HomeController>();
-      controller.loadMoreVersions();
+      await controller.loadVersionsByPage(page, 20, _currentFilters);
+      
+      // 确保页码输入框与实际页码同步
+      _syncPageController();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('加载失败: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFiltering = false;
+        });
+      }
     }
+  }
+
+  // 同步页码输入框
+  void _syncPageController() {
+    final controller = Get.find<HomeController>();
+    final currentPage = controller.currentPage.value;
+    if (_pageController.text != currentPage.toString()) {
+      _pageController.text = currentPage.toString();
+    }
+  }
+
+  // 跳转到指定页码
+  Future<void> _goToPage() async {
+    final pageText = _pageController.text.trim();
+    if (pageText.isEmpty) return;
+
+    final page = int.tryParse(pageText);
+    if (page == null || page < 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('请输入有效的页码（大于0的整数）'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // 获取当前总页数进行验证
+    final controller = Get.find<HomeController>();
+    final totalPages = controller.totalPages.value;
+    
+    if (totalPages > 0 && page > totalPages) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('页码超出范围，最大页码为 $totalPages'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      // 重置输入框为当前页码
+      _pageController.text = controller.currentPage.value.toString();
+      return;
+    }
+
+    await _loadPageData(page);
   }
 
   // 应用筛选条件
@@ -89,9 +155,8 @@ class HomeViewState extends State<HomeView> {
     _currentFilters = filters;
 
     try {
-      // 调用控制器进行筛选
-      final controller = Get.find<HomeController>();
-      await controller.filterVersions(filters);
+      // 重置页码为1并加载数据
+      await _loadPageData(1);
     } catch (e) {
       // 处理错误
       if (mounted) {
@@ -123,9 +188,8 @@ class HomeViewState extends State<HomeView> {
     });
 
     try {
-      // 清空筛选条件并重新加载数据
-      final controller = Get.find<HomeController>();
-      await controller.clearFilters();
+      // 重置页码为1并重新加载数据
+      await _loadPageData(1);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -765,21 +829,7 @@ class HomeViewState extends State<HomeView> {
   // 构建手机号管理区域
   Widget _buildPhoneManagement(
       int originalIndex, HomeController controller, List<String> allowPhones) {
-    // 获取当前的全量模式状态
-    final document = controller.versionList[originalIndex];
-    final data = document.data;
-    final dataIsFullMode = _isVersionFullMode(data);
-    final localIsFullMode = _isFullPublish[originalIndex];
-
-    // 使用本地状态优先，如果本地状态不存在则使用数据状态
-    final isFullMode = localIsFullMode ?? dataIsFullMode;
-
-    // 如果是全量模式，不显示手机号管理
-    if (isFullMode) {
-      return const SizedBox.shrink();
-    }
-
-    // 获取展开状态，默认为收缩（false）
+    // 无条件显示手机号管理区域
     final isExpanded = _isExpanded[originalIndex] ?? false;
 
     return Column(
@@ -1038,38 +1088,86 @@ class HomeViewState extends State<HomeView> {
     }
   }
 
-  // 构建加载更多指示器
-  Widget _buildLoadMoreIndicator(HomeController controller) {
+
+
+  // 构建页码控制面板
+  Widget _buildPaginationPanel(HomeController controller) {
     return Obx(() {
-      if (controller.isLoadingMore.value) {
-        return const Padding(
-          padding: EdgeInsets.all(16.0),
-          child: Center(
-            child: Column(
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 8),
-                Text(
-                  '加载更多...',
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ],
-            ),
-          ),
-        );
-      } else if (!controller.hasMore.value) {
-        return const Padding(
-          padding: EdgeInsets.all(16.0),
-          child: Center(
-            child: Text(
-              '没有更多数据了',
-              style: TextStyle(color: Colors.grey),
-            ),
-          ),
-        );
-      } else {
-        return const SizedBox.shrink();
+      final currentPage = controller.currentPage.value;
+      final totalPages = controller.totalPages.value;
+      final totalCount = controller.totalCount.value;
+
+      // 确保页码输入框显示当前页码
+      if (_pageController.text != currentPage.toString()) {
+        _pageController.text = currentPage.toString();
       }
+
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(
+            top: BorderSide(color: Colors.grey.shade300),
+          ),
+        ),
+        child: Row(
+          children: [
+            // 页码信息
+            Text(
+              '第 $currentPage 页，共 $totalPages 页（$totalCount 条记录）',
+              style: const TextStyle(fontSize: 14, color: Colors.grey),
+            ),
+            const Spacer(),
+            
+            // 页码输入框
+            SizedBox(
+              width: 80,
+              child: TextField(
+                controller: _pageController,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                decoration: InputDecoration(
+                  hintText: '页码',
+                  helperText: totalPages > 0 ? '1-$totalPages' : null,
+                  helperStyle: const TextStyle(fontSize: 10),
+                  border: const OutlineInputBorder(),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                ),
+                onSubmitted: (_) => _goToPage(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            
+            // 跳转按钮
+            ElevatedButton(
+              onPressed: _isFiltering ? null : _goToPage,
+              child: const Text('跳转'),
+            ),
+            const SizedBox(width: 16),
+            
+            // 上一页按钮
+            ElevatedButton.icon(
+              onPressed: (_isFiltering || currentPage <= 1) ? null : () {
+                _pageController.text = (currentPage - 1).toString();
+                _goToPage();
+              },
+              icon: const Icon(Icons.chevron_left),
+              label: const Text('上一页'),
+            ),
+            const SizedBox(width: 8),
+            
+            // 下一页按钮
+            ElevatedButton.icon(
+              onPressed: (_isFiltering || currentPage >= totalPages) ? null : () {
+                _pageController.text = (currentPage + 1).toString();
+                _goToPage();
+              },
+              icon: const Icon(Icons.chevron_right),
+              label: const Text('下一页'),
+            ),
+          ],
+        ),
+      );
     });
   }
 
@@ -1298,29 +1396,23 @@ class HomeViewState extends State<HomeView> {
                       )
                     : versions.isEmpty
                         ? _buildEmptyState()
-                        : RefreshIndicator(
-                            onRefresh: () => controller.refreshVersions(),
-                            child: ListView.separated(
-                              controller: _scrollController,
-                              itemCount: versions.length + (controller.hasMore.value ? 1 : 0),
-                              itemBuilder: (context, index) {
-                                if (index == versions.length) {
-                                  // 加载更多指示器
-                                  return _buildLoadMoreIndicator(controller);
-                                }
-                                
-                                final document = versions[index];
-                                final originalIndex =
-                                    controller.versionList.indexOf(document);
-                                return _buildVersionCard(
-                                    document, originalIndex, controller);
-                              },
-                              separatorBuilder: (context, index) =>
-                                  const SizedBox(height: 16),
-                            ),
+                        : ListView.separated(
+                            itemCount: versions.length,
+                            itemBuilder: (context, index) {
+                              final document = versions[index];
+                              final originalIndex =
+                                  controller.versionList.indexOf(document);
+                              return _buildVersionCard(
+                                  document, originalIndex, controller);
+                            },
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(height: 16),
                           ),
               ),
             ),
+
+            // 页码控制面板
+            if (versions.isNotEmpty) _buildPaginationPanel(controller),
           ],
         );
       }),
