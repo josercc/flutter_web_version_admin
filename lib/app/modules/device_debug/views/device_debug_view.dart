@@ -100,7 +100,7 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
     return Obx(() {
       final list = controller.onlineDevices;
       final all = controller.devices.values.toList()
-        ..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
+        ..sort(DeviceDebugController.compareDevicesStable);
       final show = list.isNotEmpty ? list : all;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -124,6 +124,7 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                       final selected =
                           controller.selectedDeviceId.value == d.deviceId;
                       return ListTile(
+                        key: ValueKey(d.deviceId),
                         selected: selected,
                         selectedTileColor: Colors.blue.shade50,
                         leading: Icon(
@@ -134,7 +135,8 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                         title: Text(d.listTitle, style: const TextStyle(fontSize: 14)),
                         subtitle: Text(
                           [
-                            if (d.platform != null) d.platform!,
+                            if (d.displayModel != null) d.displayModel!,
+                            if (d.displayOs != null) d.displayOs!,
                             if (d.appVersion != null) d.appVersion!,
                             d.deviceId.length > 12
                                 ? '${d.deviceId.substring(0, 12)}…'
@@ -154,13 +156,14 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
 
   Widget _buildTabs() {
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Column(
         children: [
           const TabBar(
             tabs: [
               Tab(text: '日志'),
               Tab(text: '请求'),
+              Tab(text: '设备信息'),
             ],
           ),
           Expanded(
@@ -168,12 +171,206 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
               children: [
                 _buildLogTab(),
                 _buildHttpTab(),
+                _buildDeviceInfoTab(),
               ],
             ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildDeviceInfoTab() {
+    return Obx(() {
+      final d = controller.selectedDevice;
+      if (d == null) {
+        return const Center(child: Text('请先选择左侧设备'));
+      }
+
+      // Merge envelope-level identity so the panel always shows core fields.
+      final merged = <String, String>{
+        'deviceId': d.deviceId,
+        if (d.userId != null && d.userId!.isNotEmpty) 'userId': d.userId!,
+        if (d.launchId != null && d.launchId!.isNotEmpty)
+          'launchId': d.launchId!,
+        if (d.appVersion != null && d.appVersion!.isNotEmpty)
+          'appVersion': d.appVersion!,
+        if (d.platform != null && d.platform!.isNotEmpty)
+          'platform': d.platform!,
+        ...d.deviceInfo,
+      };
+      final view = DevicePresence(
+        deviceId: d.deviceId,
+        userId: d.userId,
+        lastSeen: d.lastSeen,
+        appVersion: d.appVersion,
+        platform: d.platform,
+        launchId: d.launchId,
+        online: d.online,
+        deviceInfo: merged,
+      );
+
+      final q = controller.deviceInfoFilter.value.trim().toLowerCase();
+      var sections = view.deviceInfoSections;
+      if (q.isNotEmpty) {
+        sections = sections
+            .map(
+              (s) => DeviceInfoSection(
+                title: s.title,
+                entries: s.entries
+                    .where(
+                      (e) =>
+                          e.key.toLowerCase().contains(q) ||
+                          e.value.toLowerCase().contains(q),
+                    )
+                    .toList(),
+              ),
+            )
+            .where((s) => s.entries.isNotEmpty)
+            .toList();
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    d.listTitle,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '复制全部字段',
+                  onPressed: controller.copyDeviceInfo,
+                  icon: const Icon(Icons.copy_all),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              [
+                if (d.displayModel != null) d.displayModel!,
+                if (d.displayOs != null) d.displayOs!,
+                if (d.appVersion != null) 'v${d.appVersion}',
+                if (d.online) '在线' else '离线',
+                if (merged.isNotEmpty) '${merged.length} 字段',
+              ].join(' · '),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: TextField(
+              decoration: const InputDecoration(
+                hintText: '过滤字段名 / 值',
+                isDense: true,
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.search, size: 18),
+              ),
+              onChanged: (v) => controller.deviceInfoFilter.value = v,
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: d.deviceInfo.isEmpty && merged.length <= 3
+                ? const Center(
+                    child: Text(
+                      '暂无 Sentry 设备字段\n等待 App 下一次 presence 心跳…',
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : sections.isEmpty
+                    ? const Center(child: Text('无匹配字段'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                        itemCount: sections.length,
+                        itemBuilder: (context, sectionIndex) {
+                          final section = sections[sectionIndex];
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Padding(
+                                padding: EdgeInsets.only(
+                                  top: sectionIndex == 0 ? 4 : 16,
+                                  bottom: 6,
+                                ),
+                                child: Text(
+                                  section.title,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.blue.shade700,
+                                  ),
+                                ),
+                              ),
+                              ...section.entries.map((e) {
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    border: Border(
+                                      bottom: BorderSide(
+                                        color: Colors.grey.shade200,
+                                      ),
+                                    ),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      SizedBox(
+                                        width: 140,
+                                        child: SelectableText(
+                                          e.key,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.grey.shade600,
+                                          ),
+                                        ),
+                                      ),
+                                      Expanded(
+                                        child: SelectableText(
+                                          e.value.isEmpty
+                                              ? '(empty)'
+                                              : e.value,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            height: 1.35,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        tooltip: '复制',
+                                        icon: const Icon(Icons.copy, size: 16),
+                                        onPressed: () => controller.copyText(
+                                          '${e.key}: ${e.value}',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                          );
+                        },
+                      ),
+          ),
+        ],
+      );
+    });
   }
 
   Widget _buildLogTab() {
@@ -279,13 +476,10 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                             ),
                           ],
                         ),
-                        SelectableText(
-                          e.message,
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: color,
-                            height: 1.35,
-                          ),
+                        _ExpandableLogMessage(
+                          key: ValueKey('${e.ts}_${e.message.hashCode}'),
+                          message: e.message,
+                          color: color,
                         ),
                       ],
                     ),
@@ -720,5 +914,93 @@ class _HttpDetailPanel extends StatelessWidget {
   String _formatMap(Map<String, String> map) {
     if (map.isEmpty) return '(empty)';
     return map.entries.map((e) => '${e.key}: ${e.value}').join('\n');
+  }
+}
+
+/// Collapses long log bodies to 3 lines; tap 展开 / 收起 to toggle.
+class _ExpandableLogMessage extends StatefulWidget {
+  const _ExpandableLogMessage({
+    super.key,
+    required this.message,
+    required this.color,
+  });
+
+  final String message;
+  final Color color;
+
+  @override
+  State<_ExpandableLogMessage> createState() => _ExpandableLogMessageState();
+}
+
+class _ExpandableLogMessageState extends State<_ExpandableLogMessage> {
+  static const int _maxCollapsedLines = 3;
+
+  bool _expanded = false;
+
+  TextStyle get _style => TextStyle(
+        fontSize: 13,
+        color: widget.color,
+        height: 1.35,
+      );
+
+  bool _exceedsMaxLines(double maxWidth) {
+    final painter = TextPainter(
+      text: TextSpan(text: widget.message, style: _style),
+      maxLines: _maxCollapsedLines,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth);
+    return painter.didExceedMaxLines;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final overflows = _exceedsMaxLines(constraints.maxWidth);
+        final showToggle = overflows || _expanded;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_expanded || !overflows)
+              SelectableText(
+                widget.message,
+                style: _style,
+              )
+            else
+              GestureDetector(
+                onTap: () => setState(() => _expanded = true),
+                child: Text(
+                  widget.message,
+                  maxLines: _maxCollapsedLines,
+                  overflow: TextOverflow.ellipsis,
+                  style: _style,
+                ),
+              ),
+            if (showToggle)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: InkWell(
+                  onTap: () => setState(() => _expanded = !_expanded),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 2,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      _expanded ? '收起' : '展开',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
 }

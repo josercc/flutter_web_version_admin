@@ -93,6 +93,7 @@ class RemoteDebugEnvelope {
     this.platform,
     required this.ts,
     this.items = const [],
+    this.deviceInfo = const {},
   });
 
   final RemoteDebugEnvelopeType type;
@@ -103,6 +104,8 @@ class RemoteDebugEnvelope {
   final String? platform;
   final int ts;
   final List<Map<String, dynamic>> items;
+  /// Sentry-equivalent device / app tags from the mobile client.
+  final Map<String, String> deviceInfo;
 
   factory RemoteDebugEnvelope.fromJson(Map<String, dynamic> json) {
     final type = RemoteDebugEnvelopeType.tryParse(json['type']?.toString()) ??
@@ -129,7 +132,18 @@ class RemoteDebugEnvelope {
       ts: (json['ts'] as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
       items: items,
+      deviceInfo: _parseStringMap(json['deviceInfo']),
     );
+  }
+
+  static Map<String, String> _parseStringMap(dynamic raw) {
+    if (raw is! Map) return {};
+    final out = <String, String>{};
+    raw.forEach((k, v) {
+      if (v == null) return;
+      out[k.toString()] = v.toString();
+    });
+    return out;
   }
 
   Map<String, dynamic> toJson() => {
@@ -142,6 +156,7 @@ class RemoteDebugEnvelope {
         if (platform != null) 'platform': platform,
         'ts': ts,
         if (items.isNotEmpty) 'items': items,
+        if (deviceInfo.isNotEmpty) 'deviceInfo': deviceInfo,
       };
 
   String encode() =>
@@ -277,15 +292,19 @@ class DevicePresence {
     required this.lastSeen,
     this.appVersion,
     this.platform,
+    this.launchId,
     this.online = true,
-  });
+    Map<String, String>? deviceInfo,
+  }) : deviceInfo = deviceInfo ?? {};
 
   final String deviceId;
   String? userId;
   DateTime lastSeen;
   String? appVersion;
   String? platform;
+  String? launchId;
   bool online;
+  Map<String, String> deviceInfo;
 
   String get streamTopic =>
       RemoteDebugProtocol.streamTopic(userId: userId, deviceId: deviceId);
@@ -300,4 +319,144 @@ class DevicePresence {
     final short = deviceId.length > 8 ? deviceId.substring(0, 8) : deviceId;
     return '未登录 · $short';
   }
+
+  String? get displayModel =>
+      deviceInfo['model'] ?? deviceInfo['localizedModel'];
+
+  String? get displayOs {
+    final name = deviceInfo['systemName'];
+    final ver = deviceInfo['systemVersion'] ?? deviceInfo['androidRelease'];
+    if (name != null && ver != null) return '$name $ver';
+    if (ver != null) return ver;
+    return platform;
+  }
+
+  /// Preferred display order for common Sentry / identity fields.
+  static const List<String> preferredInfoKeys = [
+    'environment',
+    'release',
+    'dist',
+    'userId',
+    'session',
+    'appName',
+    'packageName',
+    'version',
+    'buildNumber',
+    'appLuanchId',
+    'platform',
+    'model',
+    'localizedModel',
+    'name',
+    'manufacturer',
+    'brand',
+    'systemName',
+    'systemVersion',
+    'androidRelease',
+    'sdkInt',
+    'machine',
+    'isPhysicalDevice',
+    'isDebug',
+    'token',
+  ];
+
+  List<MapEntry<String, String>> get sortedDeviceInfoEntries {
+    final entries = deviceInfo.entries.toList();
+    int rank(String key) {
+      final i = preferredInfoKeys.indexOf(key);
+      return i >= 0 ? i : preferredInfoKeys.length;
+    }
+
+    entries.sort((a, b) {
+      final ra = rank(a.key);
+      final rb = rank(b.key);
+      if (ra != rb) return ra.compareTo(rb);
+      return a.key.compareTo(b.key);
+    });
+    return entries;
+  }
+
+  /// Grouped sections for the device-info panel.
+  List<DeviceInfoSection> get deviceInfoSections {
+    const appKeys = {
+      'environment',
+      'release',
+      'dist',
+      'appName',
+      'packageName',
+      'version',
+      'buildNumber',
+      'appLuanchId',
+      'isDebug',
+      'platform',
+    };
+    const userKeys = {'userId', 'session', 'token'};
+    const deviceKeys = {
+      'model',
+      'localizedModel',
+      'name',
+      'manufacturer',
+      'brand',
+      'board',
+      'device',
+      'product',
+      'hardware',
+      'display',
+      'host',
+      'id',
+      'machine',
+      'identifierForVendor',
+      'isPhysicalDevice',
+    };
+    const osKeys = {
+      'systemName',
+      'systemVersion',
+      'androidRelease',
+      'sdkInt',
+      'incremental',
+      'utsnameRelease',
+      'utsnameVersion',
+      'sysname',
+      'nodename',
+      'time',
+    };
+
+    final remaining = Map<String, String>.from(deviceInfo);
+    List<MapEntry<String, String>> take(Set<String> keys) {
+      final out = <MapEntry<String, String>>[];
+      for (final key in preferredInfoKeys) {
+        if (!keys.contains(key)) continue;
+        final v = remaining.remove(key);
+        if (v != null) out.add(MapEntry(key, v));
+      }
+      final rest = remaining.entries
+          .where((e) => keys.contains(e.key))
+          .toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      for (final e in rest) {
+        remaining.remove(e.key);
+        out.add(e);
+      }
+      return out;
+    }
+
+    final sections = <DeviceInfoSection>[
+      DeviceInfoSection(title: '应用 / 环境', entries: take(appKeys)),
+      DeviceInfoSection(title: '用户', entries: take(userKeys)),
+      DeviceInfoSection(title: '设备', entries: take(deviceKeys)),
+      DeviceInfoSection(title: '系统', entries: take(osKeys)),
+    ];
+    if (remaining.isNotEmpty) {
+      final other = remaining.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      sections.add(DeviceInfoSection(title: '其他', entries: other));
+    }
+    return sections.where((s) => s.entries.isNotEmpty).toList();
+  }
+}
+
+class DeviceInfoSection {
+  DeviceInfoSection({required this.title, required this.entries});
+
+  final String title;
+  final List<MapEntry<String, String>> entries;
 }

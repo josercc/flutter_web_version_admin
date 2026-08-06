@@ -32,6 +32,7 @@ class DeviceDebugController extends GetxController {
   final onlyFailedHttp = false.obs;
   final pauseScroll = false.obs;
   final deviceFilter = ''.obs;
+  final deviceInfoFilter = ''.obs;
 
   NtfyDebugClient? _client;
   Timer? _presenceSweep;
@@ -40,14 +41,19 @@ class DeviceDebugController extends GetxController {
   int _reconnectAttempt = 0;
   bool _disposed = false;
 
+  /// Stable order: logged-in first, then deviceId.
+  /// Avoid sorting by live [DevicePresence.lastSeen] — presence / stream
+  /// refreshes would reshuffle the sidebar on every heartbeat.
+  static int compareDevicesStable(DevicePresence a, DevicePresence b) {
+    final aLogin = a.isLoggedIn ? 0 : 1;
+    final bLogin = b.isLoggedIn ? 0 : 1;
+    if (aLogin != bLogin) return aLogin - bLogin;
+    return a.deviceId.compareTo(b.deviceId);
+  }
+
   List<DevicePresence> get onlineDevices {
     final list = devices.values.where((d) => d.online).toList()
-      ..sort((a, b) {
-        final aLogin = a.isLoggedIn ? 0 : 1;
-        final bLogin = b.isLoggedIn ? 0 : 1;
-        if (aLogin != bLogin) return aLogin - bLogin;
-        return b.lastSeen.compareTo(a.lastSeen);
-      });
+      ..sort(compareDevicesStable);
     return list;
   }
 
@@ -254,6 +260,9 @@ class DeviceDebugController extends GetxController {
       if (existing != null) {
         existing.online = false;
         existing.lastSeen = DateTime.now();
+        if (envelope.deviceInfo.isNotEmpty) {
+          existing.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
+        }
         devices[id] = existing;
       }
       return;
@@ -267,8 +276,12 @@ class DeviceDebugController extends GetxController {
     presence.userId = envelope.userId;
     presence.appVersion = envelope.appVersion;
     presence.platform = envelope.platform;
+    presence.launchId = envelope.launchId;
     presence.lastSeen = DateTime.now();
     presence.online = true;
+    if (envelope.deviceInfo.isNotEmpty) {
+      presence.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
+    }
     devices[id] = presence;
     devices.refresh();
 
@@ -326,6 +339,32 @@ class DeviceDebugController extends GetxController {
         envelope.deviceId != follow) {
       // Still accept if subscribed to user topic with multiple devices;
       // only skip when filtering by follow is not desired — keep all for user topic.
+    }
+
+    if (envelope.deviceInfo.isNotEmpty && envelope.deviceId.isNotEmpty) {
+      final existing = devices[envelope.deviceId];
+      if (existing != null) {
+        final nextInfo = Map<String, String>.from(envelope.deviceInfo);
+        final infoChanged = !_stringMapEquals(existing.deviceInfo, nextInfo);
+        var metaChanged = false;
+        if (existing.appVersion == null && envelope.appVersion != null) {
+          existing.appVersion = envelope.appVersion;
+          metaChanged = true;
+        }
+        if (existing.platform == null && envelope.platform != null) {
+          existing.platform = envelope.platform;
+          metaChanged = true;
+        }
+        if (existing.launchId == null && envelope.launchId != null) {
+          existing.launchId = envelope.launchId;
+          metaChanged = true;
+        }
+        existing.deviceInfo = nextInfo;
+        // Avoid rebuilding the sidebar on every stream tick with identical info.
+        if (infoChanged || metaChanged) {
+          devices.refresh();
+        }
+      }
     }
 
     void pushLog(Map<String, dynamic> item) {
@@ -388,6 +427,48 @@ class DeviceDebugController extends GetxController {
     }
   }
 
+  DevicePresence? get selectedDevice {
+    final id = selectedDeviceId.value;
+    if (id == null) return null;
+    return devices[id];
+  }
+
+  Future<void> copyDeviceInfo() async {
+    final d = selectedDevice;
+    if (d == null) {
+      statusMessage.value = '请先选择设备';
+      return;
+    }
+    final merged = <String, String>{
+      'deviceId': d.deviceId,
+      if (d.userId != null && d.userId!.isNotEmpty) 'userId': d.userId!,
+      if (d.launchId != null && d.launchId!.isNotEmpty) 'launchId': d.launchId!,
+      if (d.appVersion != null && d.appVersion!.isNotEmpty)
+        'appVersion': d.appVersion!,
+      if (d.platform != null && d.platform!.isNotEmpty) 'platform': d.platform!,
+      ...d.deviceInfo,
+    };
+    if (merged.isEmpty) {
+      statusMessage.value = '暂无设备信息';
+      return;
+    }
+    final view = DevicePresence(
+      deviceId: d.deviceId,
+      lastSeen: d.lastSeen,
+      deviceInfo: merged,
+    );
+    final buf = StringBuffer();
+    for (final section in view.deviceInfoSections) {
+      buf.writeln('## ${section.title}');
+      for (final e in section.entries) {
+        buf.writeln('${e.key}: ${e.value}');
+      }
+      buf.writeln();
+    }
+    await copyText(buf.toString());
+    statusMessage.value = '设备信息已复制';
+  }
+
   void _trim(RxList list) {
     while (list.length > RemoteDebugProtocol.maxBufferItems) {
       list.removeLast();
@@ -429,5 +510,14 @@ class DeviceDebugController extends GetxController {
     }
     await copyText(buf.toString());
     statusMessage.value = '请求 JSONL 已复制到剪贴板';
+  }
+
+  static bool _stringMapEquals(Map<String, String> a, Map<String, String> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      if (b[entry.key] != entry.value) return false;
+    }
+    return true;
   }
 }
