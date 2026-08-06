@@ -12,6 +12,11 @@ import '../modules/build_management/bindings/build_management_binding.dart';
 import '../modules/build_management/views/build_management_view.dart';
 import '../modules/log_management/bindings/log_management_binding.dart';
 import '../modules/log_management/views/log_management_view.dart';
+import '../modules/packager_management/bindings/packager_management_binding.dart';
+import '../modules/packager_management/views/packager_management_view.dart';
+import '../modules/device_debug/bindings/device_debug_binding.dart';
+import '../modules/device_debug/views/device_debug_view.dart';
+import 'admin_middleware.dart';
 
 part 'app_routes.dart';
 
@@ -19,6 +24,8 @@ class AppPages {
   AppPages._();
 
   static const INITIAL = Routes.LOGIN;
+
+  static final _adminOnly = [AdminMiddleware()];
 
   static final routes = [
     GetPage(
@@ -35,21 +42,36 @@ class AppPages {
       name: _Paths.VERSION_MANAGEMENT,
       page: () => const VersionManagementView(),
       binding: VersionManagementBinding(),
+      middlewares: _adminOnly,
     ),
     GetPage(
       name: _Paths.CACHE_MANAGEMENT,
       page: () => const CacheManagementView(),
       binding: CacheManagementBinding(),
+      middlewares: _adminOnly,
     ),
     GetPage(
       name: _Paths.BUILD_MANAGEMENT,
       page: () => const BuildManagementView(),
       binding: BuildManagementBinding(),
+      middlewares: _adminOnly,
     ),
     GetPage(
       name: _Paths.LOG_MANAGEMENT,
       page: () => const LogManagementView(),
       binding: LogManagementBinding(),
+      middlewares: _adminOnly,
+    ),
+    GetPage(
+      name: _Paths.PACKAGER_MANAGEMENT,
+      page: () => const PackagerManagementView(),
+      binding: PackagerManagementBinding(),
+      middlewares: _adminOnly,
+    ),
+    GetPage(
+      name: _Paths.DEVICE_DEBUG,
+      page: () => const DeviceDebugView(),
+      binding: DeviceDebugBinding(),
     ),
   ];
 }

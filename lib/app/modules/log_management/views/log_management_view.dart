@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import '../controllers/log_management_controller.dart';
 
@@ -62,132 +63,193 @@ class LogManagementView extends StatelessWidget {
   }
 
   Widget _buildSearchForm(LogManagementController controller) {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            spreadRadius: 1,
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.search,
-                color: Colors.blue.shade600,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '日志查询',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey.shade800,
+    return Obx(() {
+      final collapsed = controller.isSearchCollapsed.value;
+      return Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              spreadRadius: 1,
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.search,
+                  color: Colors.blue.shade600,
+                  size: 20,
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // 搜索输入框
-          Row(
-            children: [
-              Expanded(
-                child: _buildSearchField(
-                  controller: TextEditingController(
-                      text: controller.searchUserId.value),
-                  label: '用户ID',
-                  hint: '输入用户ID',
-                  onChanged: (value) => controller.searchUserId.value = value,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildSearchField(
-                  controller: TextEditingController(
-                      text: controller.searchDeviceId.value),
-                  label: '设备ID',
-                  hint: '输入设备ID',
-                  onChanged: (value) => controller.searchDeviceId.value = value,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildSearchField(
-                  controller: TextEditingController(
-                      text: controller.searchSentryId.value),
-                  label: 'Sentry ID',
-                  hint: '输入Sentry ID',
-                  onChanged: (value) => controller.searchSentryId.value = value,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildSearchField(
-                  controller:
-                      TextEditingController(text: controller.searchTitle.value),
-                  label: '标题',
-                  hint: '输入标题关键词',
-                  onChanged: (value) => controller.searchTitle.value = value,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // 操作按钮
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: controller.searchAppLoads,
-                  icon: const Icon(Icons.search, size: 18),
-                  label: const Text('搜索'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue.shade600,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+                const SizedBox(width: 8),
+                Text(
+                  '日志查询',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800,
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: controller.clearSearch,
-                  icon: const Icon(Icons.clear, size: 18),
-                  label: const Text('清空'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.grey.shade600,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: () =>
+                      controller.isSearchCollapsed.value = !collapsed,
+                  icon: Icon(
+                    collapsed ? Icons.unfold_more : Icons.unfold_less,
+                    size: 16,
+                  ),
+                  label: Text(collapsed ? '展开' : '收起'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.blue.shade600,
                   ),
                 ),
+              ],
+            ),
+            if (!collapsed) ...[
+              const SizedBox(height: 16),
+
+              // 搜索输入框
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildSearchField(
+                      controller: controller.searchUserIdController,
+                      label: '用户ID',
+                      hint: '输入用户ID',
+                      onChanged: (value) =>
+                          controller.searchUserId.value = value,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildSearchField(
+                      controller: controller.searchDeviceIdController,
+                      label: '设备ID',
+                      hint: '输入设备ID',
+                      onChanged: (value) =>
+                          controller.searchDeviceId.value = value,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildSearchField(
+                      controller: controller.searchSentryIdController,
+                      label: 'Sentry ID',
+                      hint: '输入Sentry ID',
+                      onChanged: (value) =>
+                          controller.searchSentryId.value = value,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildSearchField(
+                      controller: controller.searchTitleController,
+                      label: '标题',
+                      hint: '输入标题关键词',
+                      onChanged: (value) =>
+                          controller.searchTitle.value = value,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildSearchField(
+                      controller: controller.searchDaysController,
+                      label: '查询多少天之前',
+                      hint: '输入天数，例如 7',
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      onChanged: (value) {
+                        final parsed = int.tryParse(value);
+                        controller.searchDaysBefore.value = parsed ?? 0;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // 操作按钮
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: controller.searchAppLoads,
+                      icon: const Icon(Icons.search, size: 18),
+                      label: const Text('搜索'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: controller.clearSearch,
+                      icon: const Icon(Icons.clear, size: 18),
+                      label: const Text('清空'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.grey.shade600,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: controller.isCleaning.value ||
+                              controller.appLoads.isEmpty
+                          ? null
+                          : controller.confirmAndClean,
+                      icon: controller.isCleaning.value
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cleaning_services, size: 18),
+                      label:
+                          Text(controller.isCleaning.value ? '清理中...' : '一键清理'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.grey.shade600,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildSearchField({
@@ -195,6 +257,8 @@ class LogManagementView extends StatelessWidget {
     required String label,
     required String hint,
     required Function(String) onChanged,
+    TextInputType keyboardType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -211,6 +275,8 @@ class LogManagementView extends StatelessWidget {
         TextField(
           controller: controller,
           onChanged: onChanged,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: TextStyle(
@@ -308,39 +374,43 @@ class LogManagementView extends StatelessWidget {
       child: Column(
         children: [
           // 结果统计
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.grey.withOpacity(0.1),
-                  spreadRadius: 1,
-                  blurRadius: 4,
-                  offset: const Offset(0, 1),
+          Obx(() => Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.1),
+                      spreadRadius: 1,
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.info_outline,
-                  color: Colors.blue.shade600,
-                  size: 16,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: Colors.blue.shade600,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '共 ${controller.totalCount.value} 条记录，第 ${controller.currentPage.value} / ${controller.totalPages.value} 页',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  '找到 ${controller.appLoads.length} 条启动记录',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-              ],
-            ),
-          ),
+              )),
+          const SizedBox(height: 12),
+
+          // 分页控制
+          _buildPaginationControls(controller),
           const SizedBox(height: 12),
 
           // 启动记录列表
@@ -356,6 +426,58 @@ class LogManagementView extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Widget _buildPaginationControls(LogManagementController controller) {
+    return Obx(() {
+      final currentPage = controller.currentPage.value;
+      final totalPages = controller.totalPages.value;
+
+      return Row(
+        children: [
+          Text(
+            '每页 ${controller.pageSize} 条',
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+          ),
+          const Spacer(),
+          OutlinedButton.icon(
+            onPressed: currentPage > 1
+                ? () => controller.loadAppLoadsByPage(page: currentPage - 1)
+                : null,
+            icon: const Icon(Icons.chevron_left, size: 16),
+            label: const Text('上一页'),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: currentPage < totalPages
+                ? () => controller.loadAppLoadsByPage(page: currentPage + 1)
+                : null,
+            icon: const Icon(Icons.chevron_right, size: 16),
+            label: const Text('下一页'),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            onPressed: () => controller.loadAppLoadsByPage(page: 1),
+            child: const Text('刷新当前条件'),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed:
+                controller.isCleaning.value || controller.appLoads.isEmpty
+                    ? null
+                    : controller.confirmAndClean,
+            icon: controller.isCleaning.value
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cleaning_services, size: 16),
+            label: Text(controller.isCleaning.value ? '清理中...' : '一键清理'),
+          ),
+        ],
+      );
+    });
   }
 
   Widget _buildAppLoadCard(
@@ -384,13 +506,22 @@ class LogManagementView extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '启动记录 ${appLoad.$id.substring(0, 8)}...',
+                      '启动记录 ${appLoad.$id}',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w500,
                         color: Colors.grey.shade800,
                       ),
+                      softWrap: true,
                     ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    color: Colors.red.shade400,
+                    tooltip: '删除该启动记录',
+                    onPressed: controller.isCleaning.value
+                        ? null
+                        : () => controller.confirmAndCleanSingle(appLoad),
                   ),
                   Icon(
                     Icons.chevron_right,
@@ -411,10 +542,7 @@ class LogManagementView extends StatelessWidget {
                   _buildInfoChip(
                     icon: Icons.phone_android,
                     label: '设备',
-                    value: (appLoad.data['deviceId'] ?? '').toString().length >
-                            8
-                        ? '${(appLoad.data['deviceId'] ?? '').toString().substring(0, 8)}...'
-                        : (appLoad.data['deviceId'] ?? '').toString(),
+                    value: (appLoad.data['deviceId'] ?? '').toString(),
                   ),
                 ],
               ),
@@ -455,6 +583,7 @@ class LogManagementView extends StatelessWidget {
           borderRadius: BorderRadius.circular(4),
         ),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
               icon,
@@ -469,7 +598,7 @@ class LogManagementView extends StatelessWidget {
                   fontSize: 11,
                   color: Colors.grey.shade700,
                 ),
-                overflow: TextOverflow.ellipsis,
+                softWrap: true,
               ),
             ),
           ],

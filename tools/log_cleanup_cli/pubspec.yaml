@@ -1,0 +1,14 @@
+name: log_cleanup_cli
+description: 按天数查询并删除 Appwrite 历史日志数据的终端工具
+publish_to: none
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  dart_appwrite: ^14.0.0
+  dotenv: ^4.2.0
+  http: ^1.2.2
+
+executables:
+  log_cleanup_cli:

@@ -1,5 +1,6 @@
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_web_version_admin/app/commons/appwrite_manager.dart';
+import 'package:flutter_web_version_admin/app/commons/auth_session.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,6 +29,7 @@ class LoginController extends GetxController {
     try {
       final appwriteManager = Get.find<AppwriteManager>();
       await appwriteManager.login(email: email, password: password);
+      await Get.find<AuthSession>().loadFromAppwrite();
       SmartDialog.dismiss();
       // 登录成功处理
       Get.offAllNamed('/home');

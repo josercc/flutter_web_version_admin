@@ -1,11 +1,81 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:flutter_web_version_admin/app/commons/appwrite_manager.dart';
+import 'package:flutter_web_version_admin/app/commons/auth_session.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_web_version_admin/app/routes/app_pages.dart';
+
+class _MenuItem {
+  const _MenuItem({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.route,
+    this.adminOnly = true,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final String route;
+  final bool adminOnly;
+}
 
 class HomeView extends StatelessWidget {
   const HomeView({super.key});
 
+  static const _menuItems = <_MenuItem>[
+    _MenuItem(
+      title: '版本管理',
+      subtitle: '管理热更新版本',
+      icon: Icons.settings,
+      color: Colors.blue,
+      route: Routes.VERSION_MANAGEMENT,
+    ),
+    _MenuItem(
+      title: '缓存管理',
+      subtitle: '管理缓存文件',
+      icon: Icons.storage,
+      color: Colors.indigo,
+      route: Routes.CACHE_MANAGEMENT,
+    ),
+    _MenuItem(
+      title: '打包管理',
+      subtitle: '管理打包信息',
+      icon: Icons.build,
+      color: Colors.teal,
+      route: Routes.BUILD_MANAGEMENT,
+    ),
+    _MenuItem(
+      title: '打包机管理',
+      subtitle: '管理打包机状态',
+      icon: Icons.computer,
+      color: Colors.cyan,
+      route: Routes.PACKAGER_MANAGEMENT,
+    ),
+    _MenuItem(
+      title: '日志管理',
+      subtitle: '查询应用日志',
+      icon: Icons.assignment,
+      color: Colors.red,
+      route: Routes.LOG_MANAGEMENT,
+    ),
+    _MenuItem(
+      title: '远程调试',
+      subtitle: '实时日志请求流',
+      icon: Icons.bug_report,
+      color: Colors.deepOrange,
+      route: Routes.DEVICE_DEBUG,
+      adminOnly: false,
+    ),
+  ];
+
   @override
   Widget build(BuildContext context) {
+    final auth = Get.find<AuthSession>();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Flutter热更版本管理'),
@@ -13,6 +83,46 @@ class HomeView extends StatelessWidget {
         backgroundColor: Colors.blue.shade600,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: '退出登录',
+            icon: const Icon(Icons.logout),
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('确认退出'),
+                  content: const Text('确定要退出当前账号吗？'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('取消'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text('退出'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirm != true) return;
+
+              // 清理本地缓存的账号信息
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('email');
+              await prefs.remove('password');
+
+              // 调用 Appwrite 退出接口
+              final appwriteManager = Get.find<AppwriteManager>();
+              await appwriteManager.logout();
+              Get.find<AuthSession>().clear();
+
+              // 回到登录页
+              Get.offAllNamed(Routes.LOGIN);
+            },
+          ),
+        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -28,22 +138,22 @@ class HomeView extends StatelessWidget {
         child: SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 欢迎标题
-                _buildWelcomeSection(),
-                const SizedBox(height: 20),
-
-                // 功能菜单
-                _buildMenuSection(),
-                const SizedBox(height: 20),
-
-                // 统计信息
-                _buildStatsSection(),
-                const SizedBox(height: 20), // 底部额外间距
-              ],
-            ),
+            child: Obx(() {
+              final isAdmin = auth.isAdmin.value;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildWelcomeSection(),
+                  const SizedBox(height: 20),
+                  _buildMenuSection(isAdmin: isAdmin),
+                  if (isAdmin) ...[
+                    const SizedBox(height: 20),
+                    _buildStatsSection(),
+                  ],
+                  const SizedBox(height: 20),
+                ],
+              );
+            }),
           ),
         ),
       ),
@@ -108,7 +218,11 @@ class HomeView extends StatelessWidget {
     );
   }
 
-  Widget _buildMenuSection() {
+  Widget _buildMenuSection({required bool isAdmin}) {
+    final visibleItems = _menuItems
+        .where((item) => isAdmin || !item.adminOnly)
+        .toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -125,83 +239,18 @@ class HomeView extends StatelessWidget {
           spacing: 12,
           runSpacing: 12,
           children: [
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '版本管理',
-                subtitle: '管理热更新版本',
-                icon: Icons.settings,
-                color: Colors.blue,
-                onTap: () => Get.toNamed('/version-management'),
+            for (final item in visibleItems)
+              SizedBox(
+                width: 100,
+                height: 100,
+                child: _buildMenuCard(
+                  title: item.title,
+                  subtitle: item.subtitle,
+                  icon: item.icon,
+                  color: item.color,
+                  onTap: () => Get.toNamed(item.route),
+                ),
               ),
-            ),
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '缓存管理',
-                subtitle: '管理缓存文件',
-                icon: Icons.storage,
-                color: Colors.indigo,
-                onTap: () => Get.toNamed('/cache-management'),
-              ),
-            ),
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '打包管理',
-                subtitle: '管理打包信息',
-                icon: Icons.build,
-                color: Colors.teal,
-                onTap: () => Get.toNamed('/build-management'),
-              ),
-            ),
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '日志管理',
-                subtitle: '查询应用日志',
-                icon: Icons.assignment,
-                color: Colors.red,
-                onTap: () => Get.toNamed('/log-management'),
-              ),
-            ),
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '版本发布',
-                subtitle: '发布新版本',
-                icon: Icons.publish,
-                color: Colors.green,
-                onTap: () => _showComingSoon(),
-              ),
-            ),
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '用户管理',
-                subtitle: '管理测试用户',
-                icon: Icons.people,
-                color: Colors.orange,
-                onTap: () => _showComingSoon(),
-              ),
-            ),
-            SizedBox(
-              width: 100,
-              height: 100,
-              child: _buildMenuCard(
-                title: '系统设置',
-                subtitle: '系统配置',
-                icon: Icons.tune,
-                color: Colors.purple,
-                onTap: () => _showComingSoon(),
-              ),
-            ),
           ],
         ),
       ],
@@ -388,21 +437,6 @@ class HomeView extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-
-  void _showComingSoon() {
-    Get.snackbar(
-      '功能开发中',
-      '该功能正在开发中，敬请期待！',
-      snackPosition: SnackPosition.TOP,
-      backgroundColor: Colors.orange.shade100,
-      colorText: Colors.orange.shade800,
-      icon: Icon(
-        Icons.construction,
-        color: Colors.orange.shade600,
-      ),
-      duration: const Duration(seconds: 2),
     );
   }
 }

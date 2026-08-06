@@ -1,19 +1,26 @@
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/models.dart';
+import 'package:appwrite/src/enums.dart';
 import 'package:get/get.dart';
+import 'rate_limit_handler.dart';
+import 'appwrite_client.dart';
 
 class AppwriteManager extends GetxService {
-  final client = Client();
+  final client = AppwriteClient();
   late Account _account;
   late Databases _databases;
   late Storage _storage;
+  RateLimitHandler? _rateLimitHandler;
+
+  /// 设置速率限制处理器
+  void setRateLimitHandler(RateLimitHandler handler) {
+    _rateLimitHandler = handler;
+  }
 
   @override
   void onInit() {
     super.onInit();
-    client
-        .setEndpoint('https://appwrite.winnermedical.com/v1')
-        .setProject('677f626b0012252b422e');
+    // 客户端已在构造函数中配置好端点等信息
     _account = Account(client);
     _databases = Databases(client);
     _storage = Storage(client);
@@ -22,6 +29,9 @@ class AppwriteManager extends GetxService {
   // 公共访问器
   Databases get databases => _databases;
   Storage get storage => _storage;
+
+  /// 获取当前限速信息（最新一次响应的限速信息）
+  AppwriteRateLimit? get rateLimit => client.rateLimit;
 
   /// 进行登录
   Future<void> login({required String email, required String password}) async {
@@ -40,6 +50,37 @@ class AppwriteManager extends GetxService {
         password: password,
       );
     }
+  }
+
+  /// 退出登录
+  Future<void> logout() async {
+    try {
+      await _account.deleteSession(sessionId: 'current');
+    } catch (_) {
+      // 如果当前没有会话，忽略错误
+    }
+  }
+
+  /// 获取当前登录用户信息（绕过 SDK User.fromMap，避免 targets.expired 为 null 时崩溃）
+  Future<Map<String, dynamic>> getCurrentAccountMap() async {
+    final res = await client.call(
+      HttpMethod.get,
+      path: '/account',
+    );
+    final data = res.data;
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return <String, dynamic>{};
+  }
+
+  /// 当前用户 labels
+  Future<List<String>> getCurrentUserLabels() async {
+    final account = await getCurrentAccountMap();
+    final labels = account['labels'];
+    if (labels is List) {
+      return labels.map((e) => e.toString()).toList();
+    }
+    return const [];
   }
 
   /// 查询当前热更的版本列表
@@ -390,6 +431,44 @@ class AppwriteManager extends GetxService {
       databaseId: '67c566f20023fc5bd074',
       collectionId: '68463b340010d6142dd1',
       documentId: documentId,
+    );
+  }
+
+  // ========== 用户管理相关方法 ==========
+  // 注意：Appwrite Flutter 客户端 SDK 不支持 Users API（这是服务端 API）
+  // 要获取用户列表，需要通过服务端 API 端点实现
+
+  // ========== 打包机管理相关方法 ==========
+
+  static const String _packagerDatabaseId = '6a6aaced00065290a69c';
+  static const String _packagerCollectionId = '6a6aacfb00024a65ba3d';
+
+  /// 获取打包机列表
+  Future<DocumentList> getPackagerList({
+    int page = 1,
+    int limit = 100,
+  }) async {
+    return await _databases.listDocuments(
+      databaseId: _packagerDatabaseId,
+      collectionId: _packagerCollectionId,
+      queries: [
+        Query.orderDesc('\$createdAt'),
+        Query.limit(limit),
+        Query.offset((page - 1) * limit),
+      ],
+    );
+  }
+
+  /// 更新打包机 active 状态
+  Future<void> updatePackagerActive({
+    required String documentId,
+    required bool active,
+  }) async {
+    await _databases.updateDocument(
+      databaseId: _packagerDatabaseId,
+      collectionId: _packagerCollectionId,
+      documentId: documentId,
+      data: {'active': active},
     );
   }
 }
