@@ -438,6 +438,79 @@ class AppwriteManager extends GetxService {
   // 注意：Appwrite Flutter 客户端 SDK 不支持 Users API（这是服务端 API）
   // 要获取用户列表，需要通过服务端 API 端点实现
 
+  // ========== 允许用户白名单相关方法 ==========
+
+  static const String _allowUserDatabaseId = '677f63ac003be28fb635';
+  static const String _allowUserCollectionId = '6a74204600176b048060';
+  static const String _allowUserDocumentId = '6a7421d4002736fb3317';
+  static const String _allowUserIdsField = 'allow_user_ids';
+
+  /// 获取允许用户 ID 白名单（文档不存在时自动创建空列表）
+  Future<List<String>> getAllowUserIds() async {
+    try {
+      final document = await _databases.getDocument(
+        databaseId: _allowUserDatabaseId,
+        collectionId: _allowUserCollectionId,
+        documentId: _allowUserDocumentId,
+      );
+      return _parseAllowUserIds(document.data[_allowUserIdsField]);
+    } on AppwriteException catch (e) {
+      if (e.type == 'document_not_found' || e.code == 404) {
+        await _ensureAllowUserDocument(const []);
+        return <String>[];
+      }
+      rethrow;
+    }
+  }
+
+  /// 更新允许用户 ID 白名单（文档不存在时自动创建）
+  Future<void> updateAllowUserIds(List<String> userIds) async {
+    try {
+      await _databases.updateDocument(
+        databaseId: _allowUserDatabaseId,
+        collectionId: _allowUserCollectionId,
+        documentId: _allowUserDocumentId,
+        data: {_allowUserIdsField: userIds},
+      );
+    } on AppwriteException catch (e) {
+      if (e.type == 'document_not_found' || e.code == 404) {
+        await _ensureAllowUserDocument(userIds);
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _ensureAllowUserDocument(List<String> userIds) async {
+    try {
+      await _databases.createDocument(
+        databaseId: _allowUserDatabaseId,
+        collectionId: _allowUserCollectionId,
+        documentId: _allowUserDocumentId,
+        data: {_allowUserIdsField: userIds},
+      );
+    } on AppwriteException catch (e) {
+      // 并发创建时可能已存在，改为更新
+      if (e.type == 'document_already_exists' || e.code == 409) {
+        await _databases.updateDocument(
+          databaseId: _allowUserDatabaseId,
+          collectionId: _allowUserCollectionId,
+          documentId: _allowUserDocumentId,
+          data: {_allowUserIdsField: userIds},
+        );
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  List<String> _parseAllowUserIds(dynamic raw) {
+    if (raw is List) {
+      return raw.map((e) => e.toString()).toList();
+    }
+    return <String>[];
+  }
+
   // ========== 打包机管理相关方法 ==========
 
   static const String _packagerDatabaseId = '6a6aaced00065290a69c';

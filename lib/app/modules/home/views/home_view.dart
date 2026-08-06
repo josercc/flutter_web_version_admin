@@ -63,6 +63,13 @@ class HomeView extends StatelessWidget {
       route: Routes.LOG_MANAGEMENT,
     ),
     _MenuItem(
+      title: '允许用户',
+      subtitle: '管理用户白名单',
+      icon: Icons.person_add_alt_1,
+      color: Colors.orange,
+      route: Routes.ALLOW_USER_MANAGEMENT,
+    ),
+    _MenuItem(
       title: '远程调试',
       subtitle: '实时日志请求流',
       icon: Icons.bug_report,

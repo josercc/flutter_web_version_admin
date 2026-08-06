@@ -16,6 +16,8 @@ import '../modules/packager_management/bindings/packager_management_binding.dart
 import '../modules/packager_management/views/packager_management_view.dart';
 import '../modules/device_debug/bindings/device_debug_binding.dart';
 import '../modules/device_debug/views/device_debug_view.dart';
+import '../modules/allow_user_management/bindings/allow_user_management_binding.dart';
+import '../modules/allow_user_management/views/allow_user_management_view.dart';
 import 'admin_middleware.dart';
 
 part 'app_routes.dart';
@@ -66,6 +68,12 @@ class AppPages {
       name: _Paths.PACKAGER_MANAGEMENT,
       page: () => const PackagerManagementView(),
       binding: PackagerManagementBinding(),
+      middlewares: _adminOnly,
+    ),
+    GetPage(
+      name: _Paths.ALLOW_USER_MANAGEMENT,
+      page: () => const AllowUserManagementView(),
+      binding: AllowUserManagementBinding(),
       middlewares: _adminOnly,
     ),
     GetPage(

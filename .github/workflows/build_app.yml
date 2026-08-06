@@ -1,0 +1,68 @@
+name: Flutter CI
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build-and-release-windows:
+    # windows-latest 已切到 VS2026，固定 windows-2022 避免工具链兼容问题
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          architecture: x64
+          flutter-version: '3.41.9'
+      - name: Install project dependencies
+        run: flutter pub get
+      - name: Enable windows build
+        run: flutter config --enable-windows-desktop
+      - name: Build artifacts
+        run: flutter build windows --release
+      - name: Archive Release
+        uses: thedoctor0/zip-release@master
+        with:
+          type: 'zip'
+          filename: flutter_web_version_admin-${{ github.ref_name }}-windows.zip
+          directory: build/windows/x64/runner/Release
+      - name: Windows Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        with:
+          files: build/windows/x64/runner/Release/flutter_web_version_admin-${{ github.ref_name }}-windows.zip
+
+  build-and-release-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          architecture: x64
+          flutter-version: '3.41.9'
+      - name: Install project dependencies
+        run: flutter pub get
+      - name: Enable macOS build
+        run: flutter config --enable-macos-desktop
+      - name: Build artifacts
+        run: flutter build macos --release
+      - name: Archive Release
+        uses: thedoctor0/zip-release@master
+        with:
+          type: 'zip'
+          filename: flutter_web_version_admin-${{ github.ref_name }}-macos.zip
+          directory: build/macos/Build/Products/Release
+      - name: macOS Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+        with:
+          files: build/macos/Build/Products/Release/flutter_web_version_admin-${{ github.ref_name }}-macos.zip

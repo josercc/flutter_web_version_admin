@@ -10,6 +10,7 @@ abstract class Routes {
   static const BUILD_MANAGEMENT = _Paths.BUILD_MANAGEMENT;
   static const LOG_MANAGEMENT = _Paths.LOG_MANAGEMENT;
   static const PACKAGER_MANAGEMENT = _Paths.PACKAGER_MANAGEMENT;
+  static const ALLOW_USER_MANAGEMENT = _Paths.ALLOW_USER_MANAGEMENT;
   static const DEVICE_DEBUG = _Paths.DEVICE_DEBUG;
 }
 
@@ -22,5 +23,6 @@ abstract class _Paths {
   static const BUILD_MANAGEMENT = '/build-management';
   static const LOG_MANAGEMENT = '/log-management';
   static const PACKAGER_MANAGEMENT = '/packager-management';
+  static const ALLOW_USER_MANAGEMENT = '/allow-user-management';
   static const DEVICE_DEBUG = '/device-debug';
 }
