@@ -13,6 +13,10 @@ class RemoteDebugProtocol {
   static const int maxMessageBytes = 900 * 1024;
   static const int maxBufferItems = 5000;
 
+  /// HTTP / log item `source` — which runtime produced the event.
+  static const String sourceFlutter = 'flutter';
+  static const String sourceUnity = 'unity';
+
   static String sanitizeTopicPart(String raw) {
     final cleaned = raw.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '');
     if (cleaned.isEmpty) return 'unknown';
@@ -27,6 +31,12 @@ class RemoteDebugProtocol {
     }
     return 'winnerapp_debug_anon_${sanitizeTopicPart(deviceId)}';
   }
+
+  /// Admin → client control channel (one topic per device).
+  static String commandTopic(String deviceId) =>
+      'winnerapp_debug_cmd_${sanitizeTopicPart(deviceId)}';
+
+  static const String commandActionRefreshConfig = 'refresh_config';
 
   static String truncateForNtfy(String value) {
     final bytes = utf8.encode(value);
@@ -61,7 +71,8 @@ enum RemoteDebugEnvelopeType {
   offline,
   log,
   http,
-  batch;
+  batch,
+  command;
 
   static RemoteDebugEnvelopeType? tryParse(String? raw) {
     switch (raw) {
@@ -75,6 +86,8 @@ enum RemoteDebugEnvelopeType {
         return RemoteDebugEnvelopeType.http;
       case 'batch':
         return RemoteDebugEnvelopeType.batch;
+      case 'command':
+        return RemoteDebugEnvelopeType.command;
       default:
         return null;
     }
@@ -94,6 +107,8 @@ class RemoteDebugEnvelope {
     required this.ts,
     this.items = const [],
     this.deviceInfo = const {},
+    this.reportingEnabled,
+    this.action,
   });
 
   final RemoteDebugEnvelopeType type;
@@ -106,6 +121,12 @@ class RemoteDebugEnvelope {
   final List<Map<String, dynamic>> items;
   /// Sentry-equivalent device / app tags from the mobile client.
   final Map<String, String> deviceInfo;
+
+  /// Whether the device is uploading logs/HTTP. Null on legacy clients → treat as true.
+  final bool? reportingEnabled;
+
+  /// For [RemoteDebugEnvelopeType.command], e.g. [RemoteDebugProtocol.commandActionRefreshConfig].
+  final String? action;
 
   factory RemoteDebugEnvelope.fromJson(Map<String, dynamic> json) {
     final type = RemoteDebugEnvelopeType.tryParse(json['type']?.toString()) ??
@@ -122,6 +143,15 @@ class RemoteDebugEnvelope {
         type == RemoteDebugEnvelopeType.http) {
       items.add(Map<String, dynamic>.from(json));
     }
+    bool? reporting;
+    final rawReporting = json['reportingEnabled'];
+    if (rawReporting is bool) {
+      reporting = rawReporting;
+    } else if (rawReporting != null) {
+      final s = rawReporting.toString().toLowerCase();
+      if (s == 'true' || s == '1') reporting = true;
+      if (s == 'false' || s == '0') reporting = false;
+    }
     return RemoteDebugEnvelope(
       type: type,
       deviceId: json['deviceId']?.toString() ?? '',
@@ -133,6 +163,8 @@ class RemoteDebugEnvelope {
           DateTime.now().millisecondsSinceEpoch,
       items: items,
       deviceInfo: _parseStringMap(json['deviceInfo']),
+      reportingEnabled: reporting,
+      action: json['action']?.toString(),
     );
   }
 
@@ -157,6 +189,8 @@ class RemoteDebugEnvelope {
         'ts': ts,
         if (items.isNotEmpty) 'items': items,
         if (deviceInfo.isNotEmpty) 'deviceInfo': deviceInfo,
+        if (reportingEnabled != null) 'reportingEnabled': reportingEnabled,
+        if (action != null && action!.isNotEmpty) 'action': action,
       };
 
   String encode() =>
@@ -169,6 +203,7 @@ class DebugLogEntry {
     required this.message,
     required this.ts,
     this.tag,
+    this.source,
     this.deviceId,
     this.userId,
   });
@@ -177,18 +212,81 @@ class DebugLogEntry {
   final String message;
   final int ts;
   final String? tag;
+
+  /// `flutter` / `unity` / null (legacy envelopes without source).
+  final String? source;
   final String? deviceId;
   final String? userId;
+
+  bool get isUnity => source == RemoteDebugProtocol.sourceUnity;
+  bool get isFlutter =>
+      source == RemoteDebugProtocol.sourceFlutter || source == null;
+
+  String get sourceLabel {
+    if (isUnity) return 'Unity';
+    if (source == RemoteDebugProtocol.sourceFlutter) return 'Flutter';
+    return 'Flutter';
+  }
+
+  /// Normalized level bucket: `error` | `warning` | `info` | `debug`.
+  String get levelKind {
+    final raw = level.trim().toLowerCase();
+    switch (raw) {
+      case 'e':
+      case 'error':
+      case 'err':
+      case 'fatal':
+      case 'f':
+      case 'wtf':
+        return 'error';
+      case 'w':
+      case 'warn':
+      case 'warning':
+        return 'warning';
+      case 'i':
+      case 'info':
+      case 'log':
+        return 'info';
+      case 'd':
+      case 'debug':
+      case 'v':
+      case 'verbose':
+      case 't':
+      case 'trace':
+        return 'debug';
+      default:
+        if (raw.contains('error') || raw.contains('fatal')) return 'error';
+        if (raw.contains('warn')) return 'warning';
+        if (raw.contains('info')) return 'info';
+        return 'debug';
+    }
+  }
+
+  String get levelLabel {
+    switch (levelKind) {
+      case 'error':
+        return 'Error';
+      case 'warning':
+        return 'Warning';
+      case 'info':
+        return 'Info';
+      default:
+        return 'Debug';
+    }
+  }
 
   factory DebugLogEntry.fromItem(
     Map<String, dynamic> item, {
     String? deviceId,
     String? userId,
   }) {
+    final rawSource = item['source']?.toString().trim();
+    final source = (rawSource == null || rawSource.isEmpty) ? null : rawSource;
     return DebugLogEntry(
       level: item['level']?.toString() ?? 'i',
       message: item['message']?.toString() ?? '',
-      tag: item['tag']?.toString(),
+      tag: parseTag(item),
+      source: source,
       ts: (item['ts'] as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
       deviceId: deviceId,
@@ -196,9 +294,31 @@ class DebugLogEntry {
     );
   }
 
+  /// Prefer `tag`, then first of `tags`, then `name` / `logger`.
+  static String? parseTag(Map<String, dynamic> item) {
+    String? clean(dynamic raw) {
+      if (raw == null) return null;
+      if (raw is List) {
+        for (final e in raw) {
+          final s = e?.toString().trim();
+          if (s != null && s.isNotEmpty) return s;
+        }
+        return null;
+      }
+      final s = raw.toString().trim();
+      return s.isEmpty ? null : s;
+    }
+
+    return clean(item['tag']) ??
+        clean(item['tags']) ??
+        clean(item['name']) ??
+        clean(item['logger']);
+  }
+
   String get copyText {
     final time = DateTime.fromMillisecondsSinceEpoch(ts).toIso8601String();
-    return '[$time][$level]${tag != null ? '[$tag]' : ''} $message';
+    final tagPart = tag != null ? '[$tag]' : '';
+    return '[$time][$sourceLabel][$level]$tagPart $message';
   }
 }
 
@@ -214,10 +334,12 @@ class DebugHttpEntry {
     this.responseHeaders = const {},
     this.requestBody,
     this.responseBody,
+    this.businessCode,
     this.error,
     required this.ts,
     this.deviceId,
     this.userId,
+    this.source,
   });
 
   final String method;
@@ -230,10 +352,47 @@ class DebugHttpEntry {
   final Map<String, String> responseHeaders;
   final String? requestBody;
   final String? responseBody;
+
+  /// Business `code` parsed from JSON response body (e.g. `{ "code": 40001 }`).
+  final int? businessCode;
   final String? error;
   final int ts;
   final String? deviceId;
   final String? userId;
+
+  /// `flutter` / `unity` / null (legacy envelopes without source).
+  final String? source;
+
+  bool get isUnity => source == RemoteDebugProtocol.sourceUnity;
+  bool get isFlutter =>
+      source == RemoteDebugProtocol.sourceFlutter || source == null;
+
+  /// HTTP transport succeeded (2xx/3xx) but body `code` is present and ≠ 200.
+  bool get isBusinessFailure =>
+      businessCode != null && businessCode != 200;
+
+  String get sourceLabel {
+    if (isUnity) return 'Unity';
+    if (source == RemoteDebugProtocol.sourceFlutter) return 'Flutter';
+    return 'Flutter';
+  }
+
+  /// Extract API business code from a JSON response body when present.
+  static int? parseBusinessCode(String? body) {
+    if (body == null) return null;
+    final trimmed = body.trim();
+    if (trimmed.isEmpty || trimmed == '(empty)') return null;
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! Map) return null;
+      final raw = decoded['code'];
+      if (raw == null) return null;
+      if (raw is num) return raw.toInt();
+      return int.tryParse(raw.toString());
+    } catch (_) {
+      return null;
+    }
+  }
 
   factory DebugHttpEntry.fromItem(
     Map<String, dynamic> item, {
@@ -246,10 +405,16 @@ class DebugHttpEntry {
     }
 
     final status = (item['statusCode'] as num?)?.toInt();
+    final responseBody = item['responseBody']?.toString();
+    final businessCode = parseBusinessCode(responseBody);
+    final httpOk = status != null && status >= 200 && status < 400;
     final okFlag = item['ok'];
-    final ok = okFlag is bool
-        ? okFlag
-        : (status != null && status >= 200 && status < 400);
+    // HTTP 200 but body code ≠ 200 counts as a failed request.
+    final transportOk = okFlag is bool ? okFlag : httpOk;
+    final ok = transportOk &&
+        (businessCode == null || businessCode == 200);
+    final rawSource = item['source']?.toString().trim();
+    final source = (rawSource == null || rawSource.isEmpty) ? null : rawSource;
 
     return DebugHttpEntry(
       method: item['method']?.toString() ?? 'GET',
@@ -261,19 +426,23 @@ class DebugHttpEntry {
       requestHeaders: mapHeaders(item['requestHeaders']),
       responseHeaders: mapHeaders(item['responseHeaders']),
       requestBody: item['requestBody']?.toString(),
-      responseBody: item['responseBody']?.toString(),
+      responseBody: responseBody,
+      businessCode: businessCode,
       error: item['error']?.toString(),
       ts: (item['ts'] as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
       deviceId: deviceId,
       userId: userId,
+      source: source,
     );
   }
 
   String get copyText => jsonEncode({
+        'source': source ?? RemoteDebugProtocol.sourceFlutter,
         'method': method,
         'url': url,
         'statusCode': statusCode,
+        'businessCode': businessCode,
         'ok': ok,
         'durationMs': durationMs,
         'requestHeaders': requestHeaders,
@@ -294,6 +463,7 @@ class DevicePresence {
     this.platform,
     this.launchId,
     this.online = true,
+    this.reportingEnabled = true,
     Map<String, String>? deviceInfo,
   }) : deviceInfo = deviceInfo ?? {};
 
@@ -304,6 +474,9 @@ class DevicePresence {
   String? platform;
   String? launchId;
   bool online;
+
+  /// True when device uploads logs/HTTP. Legacy clients without the field stay true.
+  bool reportingEnabled;
   Map<String, String> deviceInfo;
 
   String get streamTopic =>

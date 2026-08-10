@@ -28,11 +28,20 @@ class DeviceDebugController extends GetxController {
   final logs = <DebugLogEntry>[].obs;
   final https = <DebugHttpEntry>[].obs;
   final logFilter = ''.obs;
+  /// `all` | `error` | `warning` | `info` | `debug`
+  final logLevelFilter = 'all'.obs;
   final httpFilter = ''.obs;
   final onlyFailedHttp = false.obs;
+  /// `all` | `flutter` | `unity`
+  final httpSourceFilter = 'all'.obs;
   final pauseScroll = false.obs;
   final deviceFilter = ''.obs;
   final deviceInfoFilter = ''.obs;
+
+  /// Left-panel filters (substring, case-insensitive where applicable).
+  final listFilterUserId = ''.obs;
+  final listFilterDeviceId = ''.obs;
+  final listFilterModel = ''.obs;
 
   NtfyDebugClient? _client;
   Timer? _presenceSweep;
@@ -51,17 +60,38 @@ class DeviceDebugController extends GetxController {
     return a.deviceId.compareTo(b.deviceId);
   }
 
-  List<DevicePresence> get onlineDevices {
-    final list = devices.values.where((d) => d.online).toList()
+  List<DevicePresence> _applyListFilters(Iterable<DevicePresence> source) {
+    final uid = listFilterUserId.value.trim().toLowerCase();
+    final did = listFilterDeviceId.value.trim().toLowerCase();
+    final model = listFilterModel.value.trim().toLowerCase();
+    return source.where((d) {
+      if (uid.isNotEmpty) {
+        final u = (d.userId ?? '').toLowerCase();
+        if (!u.contains(uid)) return false;
+      }
+      if (did.isNotEmpty) {
+        if (!d.deviceId.toLowerCase().contains(did)) return false;
+      }
+      if (model.isNotEmpty) {
+        final m = (d.displayModel ?? '').toLowerCase();
+        if (!m.contains(model)) return false;
+      }
+      return true;
+    }).toList()
       ..sort(compareDevicesStable);
-    return list;
   }
+
+  List<DevicePresence> get reportingOnlineDevices => _applyListFilters(
+        devices.values.where((d) => d.online && d.reportingEnabled),
+      );
 
   List<DebugLogEntry> get filteredLogs {
     final q = logFilter.value.trim().toLowerCase();
     final df = deviceFilter.value.trim();
+    final level = logLevelFilter.value;
     return logs.where((e) {
       if (df.isNotEmpty && e.deviceId != df) return false;
+      if (level != 'all' && e.levelKind != level) return false;
       if (q.isEmpty) return true;
       return e.copyText.toLowerCase().contains(q);
     }).toList();
@@ -70,12 +100,20 @@ class DeviceDebugController extends GetxController {
   List<DebugHttpEntry> get filteredHttps {
     final q = httpFilter.value.trim().toLowerCase();
     final df = deviceFilter.value.trim();
+    final source = httpSourceFilter.value;
     return https.where((e) {
       if (onlyFailedHttp.value && e.ok) return false;
       if (df.isNotEmpty && e.deviceId != df) return false;
+      if (source == RemoteDebugProtocol.sourceUnity && !e.isUnity) {
+        return false;
+      }
+      if (source == RemoteDebugProtocol.sourceFlutter && e.isUnity) {
+        return false;
+      }
       if (q.isEmpty) return true;
       return e.url.toLowerCase().contains(q) ||
           e.method.toLowerCase().contains(q) ||
+          e.sourceLabel.toLowerCase().contains(q) ||
           (e.error?.toLowerCase().contains(q) ?? false);
     }).toList();
   }
@@ -248,6 +286,8 @@ class DeviceDebugController extends GetxController {
       case RemoteDebugEnvelopeType.batch:
         _handleData(envelope);
         break;
+      case RemoteDebugEnvelopeType.command:
+        break;
     }
   }
 
@@ -260,6 +300,9 @@ class DeviceDebugController extends GetxController {
       if (existing != null) {
         existing.online = false;
         existing.lastSeen = DateTime.now();
+        if (envelope.reportingEnabled != null) {
+          existing.reportingEnabled = envelope.reportingEnabled!;
+        }
         if (envelope.deviceInfo.isNotEmpty) {
           existing.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
         }
@@ -279,6 +322,8 @@ class DeviceDebugController extends GetxController {
     presence.launchId = envelope.launchId;
     presence.lastSeen = DateTime.now();
     presence.online = true;
+    // Legacy clients omit the field → keep treating as reporting on.
+    presence.reportingEnabled = envelope.reportingEnabled ?? true;
     if (envelope.deviceInfo.isNotEmpty) {
       presence.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
     }
@@ -306,6 +351,10 @@ class DeviceDebugController extends GetxController {
     selectedDeviceId.value = presence.deviceId;
     followDeviceId.value = presence.deviceId;
     deviceFilter.value = '';
+    if (!presence.reportingEnabled) {
+      statusMessage.value = '该设备未开启上报，无法订阅日志流';
+      return;
+    }
     await _subscribeStream(presence.streamTopic);
   }
 
@@ -491,6 +540,7 @@ class DeviceDebugController extends GetxController {
     final buf = StringBuffer();
     for (final e in filteredLogs.reversed) {
       buf.writeln(jsonEncode({
+        'source': e.source ?? RemoteDebugProtocol.sourceFlutter,
         'level': e.level,
         'tag': e.tag,
         'message': e.message,

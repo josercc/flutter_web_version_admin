@@ -38,7 +38,7 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
           Expanded(
             child: Row(
               children: [
-                SizedBox(width: 280, child: _buildDeviceList()),
+                SizedBox(width: 480, child: _buildDeviceList()),
                 const VerticalDivider(width: 1),
                 Expanded(child: _buildTabs()),
               ],
@@ -97,42 +97,113 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
   }
 
   Widget _buildDeviceList() {
-    return Obx(() {
-      final list = controller.onlineDevices;
-      final all = controller.devices.values.toList()
-        ..sort(DeviceDebugController.compareDevicesStable);
-      final show = list.isNotEmpty ? list : all;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text(
-              '在线源 (${list.length})',
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: '用户 ID',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => controller.listFilterUserId.value = v,
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: '设备 ID',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => controller.listFilterDeviceId.value = v,
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: '机型',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => controller.listFilterModel.value = v,
+              ),
+            ],
           ),
-          Expanded(
-            child: show.isEmpty
-                ? const Center(
-                    child: Text('等待 App 开启远程调试…', textAlign: TextAlign.center),
-                  )
-                : ListView.builder(
-                    itemCount: show.length,
-                    itemBuilder: (context, index) {
-                      final d = show[index];
+        ),
+        Expanded(
+          child: Obx(() {
+            final reporting = controller.reportingOnlineDevices;
+            return _buildDeviceColumn(
+              title: '上报中 (${reporting.length})',
+              devices: reporting,
+              emptyHint: '暂无上报中设备',
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDeviceColumn({
+    required String title,
+    required List<DevicePresence> devices,
+    required String emptyHint,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+          child: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          ),
+        ),
+        Expanded(
+          child: devices.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(
+                      emptyHint,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  itemCount: devices.length,
+                  itemBuilder: (context, index) {
+                    final d = devices[index];
+                    return Obx(() {
                       final selected =
                           controller.selectedDeviceId.value == d.deviceId;
                       return ListTile(
                         key: ValueKey(d.deviceId),
                         selected: selected,
                         selectedTileColor: Colors.blue.shade50,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 0,
+                        ),
                         leading: Icon(
                           Icons.circle,
-                          size: 12,
-                          color: d.online ? Colors.green : Colors.grey,
+                          size: 10,
+                          color: Colors.green,
                         ),
-                        title: Text(d.listTitle, style: const TextStyle(fontSize: 14)),
+                        title: Text(
+                          d.listTitle,
+                          style: const TextStyle(fontSize: 13),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         subtitle: Text(
                           [
                             if (d.displayModel != null) d.displayModel!,
@@ -142,16 +213,18 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                                 ? '${d.deviceId.substring(0, 12)}…'
                                 : d.deviceId,
                           ].join(' · '),
-                          style: const TextStyle(fontSize: 11),
+                          style: const TextStyle(fontSize: 10),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         onTap: () => controller.selectDevice(d),
                       );
-                    },
-                  ),
-          ),
-        ],
-      );
-    });
+                    });
+                  },
+                ),
+        ),
+      ],
+    );
   }
 
   Widget _buildTabs() {
@@ -261,7 +334,6 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                 if (d.displayModel != null) d.displayModel!,
                 if (d.displayOs != null) d.displayOs!,
                 if (d.appVersion != null) 'v${d.appVersion}',
-                if (d.online) '在线' else '离线',
                 if (merged.isNotEmpty) '${merged.length} 字段',
               ].join(' · '),
               style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
@@ -374,176 +446,242 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
   }
 
   Widget _buildLogTab() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  decoration: const InputDecoration(
-                    hintText: '过滤日志',
-                    isDense: true,
-                    border: OutlineInputBorder(),
+    final initialLevel = controller.logLevelFilter.value;
+    final initialIndex = switch (initialLevel) {
+      'error' => 1,
+      'warning' => 2,
+      'info' => 3,
+      'debug' => 4,
+      _ => 0,
+    };
+    return DefaultTabController(
+      length: 5,
+      initialIndex: initialIndex,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      hintText: '过滤日志',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) => controller.logFilter.value = v,
                   ),
-                  onChanged: (v) => controller.logFilter.value = v,
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: '复制全部可见',
-                onPressed: () {
-                  final text = controller.filteredLogs
-                      .map((e) => e.copyText)
-                      .join('\n\n');
-                  controller.copyText(text);
-                },
-                icon: const Icon(Icons.copy_all),
-              ),
-              IconButton(
-                tooltip: '导出 JSONL',
-                onPressed: controller.exportLogsJsonl,
-                icon: const Icon(Icons.download),
-              ),
-              IconButton(
-                tooltip: '清空日志',
-                onPressed: controller.clearLogs,
-                icon: const Icon(Icons.clear_all),
-              ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: '复制全部可见',
+                  onPressed: () {
+                    final text = controller.filteredLogs
+                        .map((e) => e.copyText)
+                        .join('\n\n');
+                    controller.copyText(text);
+                  },
+                  icon: const Icon(Icons.copy_all),
+                ),
+                IconButton(
+                  tooltip: '导出 JSONL',
+                  onPressed: controller.exportLogsJsonl,
+                  icon: const Icon(Icons.download),
+                ),
+                IconButton(
+                  tooltip: '清空日志',
+                  onPressed: controller.clearLogs,
+                  icon: const Icon(Icons.clear_all),
+                ),
+              ],
+            ),
+          ),
+          TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            onTap: (index) {
+              controller.logLevelFilter.value = switch (index) {
+                1 => 'error',
+                2 => 'warning',
+                3 => 'info',
+                4 => 'debug',
+                _ => 'all',
+              };
+            },
+            tabs: const [
+              Tab(text: '全部'),
+              Tab(text: 'Error'),
+              Tab(text: 'Warning'),
+              Tab(text: 'Info'),
+              Tab(text: 'Debug'),
             ],
           ),
-        ),
-        Expanded(
-          child: Obx(() {
-            final items = controller.filteredLogs;
-            if (items.isEmpty) {
-              return const Center(child: Text('暂无日志'));
-            }
-            return ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              itemCount: items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (context, index) {
-                final e = items[index];
-                final color = switch (e.level) {
-                  'e' || 'E' || 'error' => Colors.red.shade700,
-                  'w' || 'W' || 'warning' => Colors.orange.shade800,
-                  _ => Colors.grey.shade800,
-                };
-                return Material(
-                  color: Colors.white,
-                  elevation: 0.5,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      border: Border(
-                        left: BorderSide(color: color, width: 4),
+          Expanded(
+            child: Obx(() {
+              final items = controller.filteredLogs;
+              if (items.isEmpty) {
+                return const Center(child: Text('暂无日志'));
+              }
+              return ListView.separated(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final e = items[index];
+                  final color = switch (e.levelKind) {
+                    'error' => Colors.red.shade700,
+                    'warning' => Colors.orange.shade800,
+                    'info' => Colors.blue.shade700,
+                    _ => Colors.grey.shade800,
+                  };
+                  final tag = e.tag?.trim();
+                  return Material(
+                    color: Colors.white,
+                    elevation: 0.5,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border(
+                          left: BorderSide(color: color, width: 4),
+                        ),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    padding: const EdgeInsets.all(10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              DateTime.fromMillisecondsSinceEpoch(e.ts)
-                                  .toIso8601String()
-                                  .substring(11, 23),
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey.shade600,
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                DateTime.fromMillisecondsSinceEpoch(e.ts)
+                                    .toIso8601String()
+                                    .substring(11, 23),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey.shade600,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              e.level.toUpperCase(),
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: color,
+                              const SizedBox(width: 8),
+                              _SourceBadge(isUnity: e.isUnity),
+                              const SizedBox(width: 8),
+                              Text(
+                                e.levelLabel,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: color,
+                                ),
                               ),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              tooltip: '复制本条',
-                              icon: const Icon(Icons.copy, size: 16),
-                              onPressed: () =>
-                                  controller.copyText(e.copyText),
-                            ),
-                          ],
-                        ),
-                        _ExpandableLogMessage(
-                          key: ValueKey('${e.ts}_${e.message.hashCode}'),
-                          message: e.message,
-                          color: color,
-                        ),
-                      ],
+                              if (tag != null && tag.isNotEmpty) ...[
+                                const SizedBox(width: 8),
+                                _LogTagBadge(tag: tag),
+                              ],
+                              const Spacer(),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                tooltip: '复制本条',
+                                icon: const Icon(Icons.copy, size: 16),
+                                onPressed: () =>
+                                    controller.copyText(e.copyText),
+                              ),
+                            ],
+                          ),
+                          _ExpandableLogMessage(
+                            key: ValueKey('${e.ts}_${e.message.hashCode}'),
+                            message: e.message,
+                            color: color,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              },
-            );
-          }),
-        ),
-      ],
+                  );
+                },
+              );
+            }),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildHttpTab() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  decoration: const InputDecoration(
-                    hintText: '按 URL 过滤',
-                    isDense: true,
-                    border: OutlineInputBorder(),
+    final initialSource = controller.httpSourceFilter.value;
+    final initialIndex = switch (initialSource) {
+      RemoteDebugProtocol.sourceFlutter => 1,
+      RemoteDebugProtocol.sourceUnity => 2,
+      _ => 0,
+    };
+    return DefaultTabController(
+      length: 3,
+      initialIndex: initialIndex,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      hintText: '按 URL 过滤',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) => controller.httpFilter.value = v,
                   ),
-                  onChanged: (v) => controller.httpFilter.value = v,
                 ),
-              ),
-              const SizedBox(width: 8),
-              Obx(
-                () => FilterChip(
-                  label: const Text('仅失败'),
-                  selected: controller.onlyFailedHttp.value,
-                  onSelected: (v) => controller.onlyFailedHttp.value = v,
+                const SizedBox(width: 8),
+                Obx(
+                  () => FilterChip(
+                    label: const Text('仅失败'),
+                    selected: controller.onlyFailedHttp.value,
+                    onSelected: (v) => controller.onlyFailedHttp.value = v,
+                  ),
                 ),
-              ),
-              IconButton(
-                tooltip: '导出 JSONL',
-                onPressed: controller.exportHttpsJsonl,
-                icon: const Icon(Icons.download),
-              ),
-              IconButton(
-                tooltip: '清空请求',
-                onPressed: controller.clearHttps,
-                icon: const Icon(Icons.clear_all),
-              ),
+                IconButton(
+                  tooltip: '导出 JSONL',
+                  onPressed: controller.exportHttpsJsonl,
+                  icon: const Icon(Icons.download),
+                ),
+                IconButton(
+                  tooltip: '清空请求',
+                  onPressed: controller.clearHttps,
+                  icon: const Icon(Icons.clear_all),
+                ),
+              ],
+            ),
+          ),
+          TabBar(
+            onTap: (index) {
+              controller.httpSourceFilter.value = switch (index) {
+                1 => RemoteDebugProtocol.sourceFlutter,
+                2 => RemoteDebugProtocol.sourceUnity,
+                _ => 'all',
+              };
+            },
+            tabs: const [
+              Tab(text: '全部'),
+              Tab(text: 'Flutter'),
+              Tab(text: 'Unity'),
             ],
           ),
-        ),
-        Expanded(
-          child: Obx(() {
-            final items = controller.filteredHttps;
-            if (items.isEmpty) {
-              return const Center(child: Text('暂无请求'));
-            }
-            return ListView.builder(
-              itemCount: items.length,
-              itemBuilder: (context, index) => _HttpTile(entry: items[index]),
-            );
-          }),
-        ),
-      ],
+          Expanded(
+            child: Obx(() {
+              final items = controller.filteredHttps;
+              if (items.isEmpty) {
+                return const Center(child: Text('暂无请求'));
+              }
+              return ListView.builder(
+                itemCount: items.length,
+                itemBuilder: (context, index) =>
+                    _HttpTile(entry: items[index]),
+              );
+            }),
+          ),
+        ],
+      ),
     );
   }
 
@@ -599,19 +737,27 @@ class _HttpTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color bar;
+    final Color? bg;
     if (entry.error != null && entry.statusCode == null) {
       bar = Colors.grey.shade700;
+      bg = null;
+    } else if (entry.isBusinessFailure) {
+      // HTTP 200 but body code ≠ 200 — amber to stand out from transport errors.
+      bar = Colors.amber.shade800;
+      bg = Colors.amber.shade50;
     } else if (entry.ok) {
       bar = Colors.green;
+      bg = null;
     } else {
       bar = Colors.red;
+      bg = Colors.red.shade50;
     }
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         border: Border(left: BorderSide(color: bar, width: 4)),
-        color: Colors.white,
+        color: bg ?? Colors.white,
         borderRadius: BorderRadius.circular(6),
         boxShadow: [
           BoxShadow(
@@ -631,30 +777,101 @@ class _HttpTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '${entry.method}  ${entry.url}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    _SourceBadge(isUnity: entry.isUnity),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${entry.method}  ${entry.url}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
                   [
-                    if (entry.statusCode != null) '${entry.statusCode}',
+                    if (entry.statusCode != null) 'HTTP ${entry.statusCode}',
+                    if (entry.businessCode != null)
+                      'code ${entry.businessCode}',
+                    if (entry.isBusinessFailure) '业务失败',
                     if (entry.durationMs != null) '${entry.durationMs}ms',
                     if (entry.error != null) entry.error!,
                     DateTime.fromMillisecondsSinceEpoch(entry.ts)
                         .toIso8601String()
                         .substring(11, 19),
                   ].join(' · '),
-                  style: TextStyle(fontSize: 12, color: bar),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: bar,
+                    fontWeight: entry.isBusinessFailure
+                        ? FontWeight.w600
+                        : FontWeight.normal,
+                  ),
                 ),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LogTagBadge extends StatelessWidget {
+  const _LogTagBadge({required this.tag});
+
+  final String tag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.blue.shade200),
+      ),
+      child: Text(
+        tag,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: Colors.blue.shade800,
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceBadge extends StatelessWidget {
+  const _SourceBadge({required this.isUnity});
+
+  final bool isUnity;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = isUnity ? 'Unity' : 'Flutter';
+    final color = isUnity ? Colors.deepOrange.shade700 : Colors.blue.shade700;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: color,
         ),
       ),
     );
@@ -716,6 +933,8 @@ class _HttpDetailPanel extends StatelessWidget {
     final Color statusColor;
     if (entry.error != null && entry.statusCode == null) {
       statusColor = Colors.grey.shade700;
+    } else if (entry.isBusinessFailure) {
+      statusColor = Colors.amber.shade900;
     } else if (entry.ok) {
       statusColor = Colors.green.shade700;
     } else {
@@ -730,7 +949,9 @@ class _HttpDetailPanel extends StatelessWidget {
           Container(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
             decoration: BoxDecoration(
-              color: Colors.grey.shade50,
+              color: entry.isBusinessFailure
+                  ? Colors.amber.shade50
+                  : Colors.grey.shade50,
               border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
             ),
             child: Column(
@@ -738,6 +959,8 @@ class _HttpDetailPanel extends StatelessWidget {
               children: [
                 Row(
                   children: [
+                    _SourceBadge(isUnity: entry.isUnity),
+                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
@@ -759,12 +982,37 @@ class _HttpDetailPanel extends StatelessWidget {
                     const SizedBox(width: 8),
                     if (entry.statusCode != null)
                       Text(
-                        '${entry.statusCode}',
+                        'HTTP ${entry.statusCode}',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
-                          color: statusColor,
+                          color: entry.isBusinessFailure
+                              ? Colors.grey.shade700
+                              : statusColor,
                         ),
                       ),
+                    if (entry.businessCode != null) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: entry.isBusinessFailure
+                              ? Colors.amber.shade200
+                              : Colors.green.shade100,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          'code ${entry.businessCode}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: statusColor,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (entry.durationMs != null) ...[
                       const SizedBox(width: 8),
                       Text(
@@ -788,6 +1036,17 @@ class _HttpDetailPanel extends StatelessWidget {
                     ),
                   ],
                 ),
+                if (entry.isBusinessFailure) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    '业务失败：HTTP ${entry.statusCode ?? '-'}，响应 code=${entry.businessCode}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.amber.shade900,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 SelectableText(
                   entry.url,
@@ -843,12 +1102,16 @@ class _HttpDetailPanel extends StatelessWidget {
 
   Widget _overviewTab() {
     final rows = <MapEntry<String, String>>[
+      MapEntry('Source', entry.sourceLabel),
       MapEntry('Method', entry.method),
       MapEntry('URL', entry.url),
       if (entry.path != null && entry.path!.isNotEmpty)
         MapEntry('Path', entry.path!),
-      MapEntry('Status', entry.statusCode?.toString() ?? '-'),
+      MapEntry('HTTP Status', entry.statusCode?.toString() ?? '-'),
+      if (entry.businessCode != null)
+        MapEntry('Business Code', entry.businessCode.toString()),
       MapEntry('OK', entry.ok.toString()),
+      if (entry.isBusinessFailure) const MapEntry('Result', '业务失败 (code ≠ 200)'),
       MapEntry(
         'Duration',
         entry.durationMs != null ? '${entry.durationMs}ms' : '-',
