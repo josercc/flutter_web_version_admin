@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -536,30 +538,78 @@ class DeviceDebugController extends GetxController {
     statusMessage.value = '已复制';
   }
 
-  Future<void> exportLogsJsonl() async {
-    final buf = StringBuffer();
-    for (final e in filteredLogs.reversed) {
-      buf.writeln(jsonEncode({
-        'source': e.source ?? RemoteDebugProtocol.sourceFlutter,
-        'level': e.level,
-        'tag': e.tag,
-        'message': e.message,
-        'ts': e.ts,
-        'deviceId': e.deviceId,
-        'userId': e.userId,
-      }));
+  Future<void> exportLogs() async {
+    final entries = filteredLogs.reversed.toList();
+    if (entries.isEmpty) {
+      statusMessage.value = '没有可导出的日志';
+      return;
     }
-    await copyText(buf.toString());
-    statusMessage.value = '日志 JSONL 已复制到剪贴板';
+    final buf = StringBuffer();
+    for (final e in entries) {
+      buf.writeln(e.exportText);
+    }
+    final stamp = _exportStamp();
+    final saved = await _saveTextFile(
+      suggestedName: 'debug_logs_$stamp.txt',
+      contents: buf.toString(),
+    );
+    if (saved != null) {
+      statusMessage.value = '日志已导出: $saved';
+    }
   }
 
-  Future<void> exportHttpsJsonl() async {
-    final buf = StringBuffer();
-    for (final e in filteredHttps.reversed) {
-      buf.writeln(e.copyText);
+  Future<void> exportHttps() async {
+    final entries = filteredHttps.reversed.toList();
+    if (entries.isEmpty) {
+      statusMessage.value = '没有可导出的请求';
+      return;
     }
-    await copyText(buf.toString());
-    statusMessage.value = '请求 JSONL 已复制到剪贴板';
+    final buf = StringBuffer();
+    for (var i = 0; i < entries.length; i++) {
+      if (i > 0) buf.writeln();
+      buf.writeln('========== #${i + 1} ==========');
+      buf.writeln(entries[i].exportText);
+    }
+    final stamp = _exportStamp();
+    final saved = await _saveTextFile(
+      suggestedName: 'debug_http_$stamp.txt',
+      contents: buf.toString(),
+    );
+    if (saved != null) {
+      statusMessage.value = '请求已导出: $saved';
+    }
+  }
+
+  String _exportStamp() {
+    final now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${now.year}${two(now.month)}${two(now.day)}_'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
+  }
+
+  /// Shows a save dialog and writes [contents] as UTF-8 text. Returns path or null.
+  Future<String?> _saveTextFile({
+    required String suggestedName,
+    required String contents,
+  }) async {
+    try {
+      final location = await getSaveLocation(
+        suggestedName: suggestedName,
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'Text', extensions: ['txt']),
+        ],
+      );
+      if (location == null) {
+        statusMessage.value = '已取消导出';
+        return null;
+      }
+      final file = File(location.path);
+      await file.writeAsString(contents, flush: true);
+      return file.path;
+    } catch (e) {
+      statusMessage.value = '导出失败: $e';
+      return null;
+    }
   }
 
   static bool _stringMapEquals(Map<String, String> a, Map<String, String> b) {

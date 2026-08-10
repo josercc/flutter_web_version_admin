@@ -320,6 +320,13 @@ class DebugLogEntry {
     final tagPart = tag != null ? '[$tag]' : '';
     return '[$time][$sourceLabel][$level]$tagPart $message';
   }
+
+  /// Plain-text export line: time, level type, message.
+  String get exportText {
+    final time = DateTime.fromMillisecondsSinceEpoch(ts).toIso8601String();
+    final tagPart = tag != null ? '[$tag] ' : '';
+    return '[$time] [$levelLabel] $tagPart$message';
+  }
 }
 
 class DebugHttpEntry {
@@ -334,6 +341,7 @@ class DebugHttpEntry {
     this.responseHeaders = const {},
     this.requestBody,
     this.responseBody,
+    this.businessSuccess,
     this.businessCode,
     this.error,
     required this.ts,
@@ -353,6 +361,9 @@ class DebugHttpEntry {
   final String? requestBody;
   final String? responseBody;
 
+  /// Business `success` parsed from JSON response body (e.g. `{ "success": true }`).
+  final bool? businessSuccess;
+
   /// Business `code` parsed from JSON response body (e.g. `{ "code": 40001 }`).
   final int? businessCode;
   final String? error;
@@ -367,9 +378,8 @@ class DebugHttpEntry {
   bool get isFlutter =>
       source == RemoteDebugProtocol.sourceFlutter || source == null;
 
-  /// HTTP transport succeeded (2xx/3xx) but body `code` is present and ≠ 200.
-  bool get isBusinessFailure =>
-      businessCode != null && businessCode != 200;
+  /// Body `success` is present and false (HTTP status may still be 2xx).
+  bool get isBusinessFailure => businessSuccess == false;
 
   String get sourceLabel {
     if (isUnity) return 'Unity';
@@ -377,21 +387,39 @@ class DebugHttpEntry {
     return 'Flutter';
   }
 
-  /// Extract API business code from a JSON response body when present.
-  static int? parseBusinessCode(String? body) {
+  static Map? _decodeBodyMap(String? body) {
     if (body == null) return null;
     final trimmed = body.trim();
     if (trimmed.isEmpty || trimmed == '(empty)') return null;
     try {
       final decoded = jsonDecode(trimmed);
-      if (decoded is! Map) return null;
-      final raw = decoded['code'];
-      if (raw == null) return null;
-      if (raw is num) return raw.toInt();
-      return int.tryParse(raw.toString());
+      return decoded is Map ? decoded : null;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Extract API business `success` from a JSON response body when present.
+  static bool? parseBusinessSuccess(String? body) {
+    final decoded = _decodeBodyMap(body);
+    if (decoded == null) return null;
+    final raw = decoded['success'];
+    if (raw is bool) return raw;
+    if (raw == null) return null;
+    final text = raw.toString().trim().toLowerCase();
+    if (text == 'true') return true;
+    if (text == 'false') return false;
+    return null;
+  }
+
+  /// Extract API business code from a JSON response body when present.
+  static int? parseBusinessCode(String? body) {
+    final decoded = _decodeBodyMap(body);
+    if (decoded == null) return null;
+    final raw = decoded['code'];
+    if (raw == null) return null;
+    if (raw is num) return raw.toInt();
+    return int.tryParse(raw.toString());
   }
 
   factory DebugHttpEntry.fromItem(
@@ -406,13 +434,13 @@ class DebugHttpEntry {
 
     final status = (item['statusCode'] as num?)?.toInt();
     final responseBody = item['responseBody']?.toString();
+    final businessSuccess = parseBusinessSuccess(responseBody);
     final businessCode = parseBusinessCode(responseBody);
     final httpOk = status != null && status >= 200 && status < 400;
     final okFlag = item['ok'];
-    // HTTP 200 but body code ≠ 200 counts as a failed request.
     final transportOk = okFlag is bool ? okFlag : httpOk;
-    final ok = transportOk &&
-        (businessCode == null || businessCode == 200);
+    // Prefer body `success`; HTTP status alone is not decisive (non-200 can be OK).
+    final ok = businessSuccess ?? transportOk;
     final rawSource = item['source']?.toString().trim();
     final source = (rawSource == null || rawSource.isEmpty) ? null : rawSource;
 
@@ -427,6 +455,7 @@ class DebugHttpEntry {
       responseHeaders: mapHeaders(item['responseHeaders']),
       requestBody: item['requestBody']?.toString(),
       responseBody: responseBody,
+      businessSuccess: businessSuccess,
       businessCode: businessCode,
       error: item['error']?.toString(),
       ts: (item['ts'] as num?)?.toInt() ??
@@ -442,6 +471,7 @@ class DebugHttpEntry {
         'method': method,
         'url': url,
         'statusCode': statusCode,
+        'businessSuccess': businessSuccess,
         'businessCode': businessCode,
         'ok': ok,
         'durationMs': durationMs,
@@ -452,6 +482,43 @@ class DebugHttpEntry {
         'error': error,
         'ts': ts,
       });
+
+  /// Plain-text export: URL, headers, request body, response body.
+  String get exportText {
+    final buf = StringBuffer();
+    final time = DateTime.fromMillisecondsSinceEpoch(ts).toIso8601String();
+    buf.writeln('时间: $time');
+    buf.writeln('请求地址: $method $url');
+    if (path != null && path!.isNotEmpty) {
+      buf.writeln('Path: $path');
+    }
+    if (statusCode != null) buf.writeln('HTTP Status: $statusCode');
+    if (businessSuccess != null) {
+      buf.writeln('Success: $businessSuccess');
+    }
+    if (businessCode != null) buf.writeln('Business Code: $businessCode');
+    if (durationMs != null) buf.writeln('Duration: ${durationMs}ms');
+    if (error != null && error!.isNotEmpty) buf.writeln('Error: $error');
+    buf.writeln('请求头:');
+    if (requestHeaders.isEmpty) {
+      buf.writeln('(empty)');
+    } else {
+      for (final e in requestHeaders.entries) {
+        buf.writeln('${e.key}: ${e.value}');
+      }
+    }
+    buf.writeln('请求内容:');
+    buf.writeln(
+      (requestBody == null || requestBody!.isEmpty) ? '(empty)' : requestBody,
+    );
+    buf.writeln('返回内容:');
+    buf.writeln(
+      (responseBody == null || responseBody!.isEmpty)
+          ? '(empty)'
+          : responseBody,
+    );
+    return buf.toString().trimRight();
+  }
 }
 
 class DevicePresence {

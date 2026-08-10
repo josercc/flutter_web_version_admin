@@ -485,8 +485,8 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                   icon: const Icon(Icons.copy_all),
                 ),
                 IconButton(
-                  tooltip: '导出 JSONL',
-                  onPressed: controller.exportLogsJsonl,
+                  tooltip: '导出日志到文件',
+                  onPressed: controller.exportLogs,
                   icon: const Icon(Icons.download),
                 ),
                 IconButton(
@@ -641,8 +641,8 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                   ),
                 ),
                 IconButton(
-                  tooltip: '导出 JSONL',
-                  onPressed: controller.exportHttpsJsonl,
+                  tooltip: '导出请求到文件',
+                  onPressed: controller.exportHttps,
                   icon: const Icon(Icons.download),
                 ),
                 IconButton(
@@ -742,7 +742,7 @@ class _HttpTile extends StatelessWidget {
       bar = Colors.grey.shade700;
       bg = null;
     } else if (entry.isBusinessFailure) {
-      // HTTP 200 but body code ≠ 200 — amber to stand out from transport errors.
+      // Body success == false — amber to stand out from transport errors.
       bar = Colors.amber.shade800;
       bg = Colors.amber.shade50;
     } else if (entry.ok) {
@@ -798,6 +798,8 @@ class _HttpTile extends StatelessWidget {
                 Text(
                   [
                     if (entry.statusCode != null) 'HTTP ${entry.statusCode}',
+                    if (entry.businessSuccess != null)
+                      'success ${entry.businessSuccess}',
                     if (entry.businessCode != null)
                       'code ${entry.businessCode}',
                     if (entry.isBusinessFailure) '业务失败',
@@ -990,7 +992,7 @@ class _HttpDetailPanel extends StatelessWidget {
                               : statusColor,
                         ),
                       ),
-                    if (entry.businessCode != null) ...[
+                    if (entry.businessSuccess != null) ...[
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -1004,12 +1006,23 @@ class _HttpDetailPanel extends StatelessWidget {
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          'code ${entry.businessCode}',
+                          'success ${entry.businessSuccess}',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
                             color: statusColor,
                           ),
+                        ),
+                      ),
+                    ],
+                    if (entry.businessCode != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        'code ${entry.businessCode}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade700,
                         ),
                       ),
                     ],
@@ -1039,7 +1052,8 @@ class _HttpDetailPanel extends StatelessWidget {
                 if (entry.isBusinessFailure) ...[
                   const SizedBox(height: 6),
                   Text(
-                    '业务失败：HTTP ${entry.statusCode ?? '-'}，响应 code=${entry.businessCode}',
+                    '业务失败：HTTP ${entry.statusCode ?? '-'}，响应 success=false'
+                    '${entry.businessCode != null ? '，code=${entry.businessCode}' : ''}',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -1108,10 +1122,13 @@ class _HttpDetailPanel extends StatelessWidget {
       if (entry.path != null && entry.path!.isNotEmpty)
         MapEntry('Path', entry.path!),
       MapEntry('HTTP Status', entry.statusCode?.toString() ?? '-'),
+      if (entry.businessSuccess != null)
+        MapEntry('Success', entry.businessSuccess.toString()),
       if (entry.businessCode != null)
         MapEntry('Business Code', entry.businessCode.toString()),
       MapEntry('OK', entry.ok.toString()),
-      if (entry.isBusinessFailure) const MapEntry('Result', '业务失败 (code ≠ 200)'),
+      if (entry.isBusinessFailure)
+        const MapEntry('Result', '业务失败 (success ≠ true)'),
       MapEntry(
         'Duration',
         entry.durationMs != null ? '${entry.durationMs}ms' : '-',
