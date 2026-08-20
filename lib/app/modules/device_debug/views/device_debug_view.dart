@@ -105,6 +105,27 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Obx(() {
+                final env = controller.listFilterEnv.value;
+                return SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'all', label: Text('全部')),
+                    ButtonSegment(
+                      value: RemoteDebugProtocol.envSit,
+                      label: Text('测试'),
+                    ),
+                    ButtonSegment(
+                      value: RemoteDebugProtocol.envProd,
+                      label: Text('生产'),
+                    ),
+                  ],
+                  selected: {env},
+                  onSelectionChanged: (s) {
+                    controller.listFilterEnv.value = s.first;
+                  },
+                );
+              }),
+              const SizedBox(height: 8),
               TextField(
                 decoration: const InputDecoration(
                   isDense: true,
@@ -136,11 +157,30 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
         ),
         Expanded(
           child: Obx(() {
+            final online = controller.onlineDevices;
             final reporting = controller.reportingOnlineDevices;
-            return _buildDeviceColumn(
-              title: '上报中 (${reporting.length})',
-              devices: reporting,
-              emptyHint: '暂无上报中设备',
+            return Column(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _buildDeviceColumn(
+                    title: '调试中 (${reporting.length})',
+                    devices: reporting,
+                    emptyHint: '暂无正在发送日志的设备\n可在下方在线列表点「打开调试」',
+                    accent: Colors.orange,
+                  ),
+                ),
+                Divider(height: 1, color: Colors.grey.shade300),
+                Expanded(
+                  flex: 3,
+                  child: _buildDeviceColumn(
+                    title: '全部在线 (${online.length})',
+                    devices: online,
+                    emptyHint: '暂无在线设备',
+                    accent: Colors.green,
+                  ),
+                ),
+              ],
             );
           }),
         ),
@@ -152,6 +192,7 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
     required String title,
     required List<DevicePresence> devices,
     required String emptyHint,
+    Color accent = Colors.green,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -160,7 +201,11 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
           child: Text(
             title,
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+              color: accent,
+            ),
           ),
         ),
         Expanded(
@@ -186,7 +231,7 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                       final selected =
                           controller.selectedDeviceId.value == d.deviceId;
                       return ListTile(
-                        key: ValueKey(d.deviceId),
+                        key: ValueKey('$title-${d.deviceId}'),
                         selected: selected,
                         selectedTileColor: Colors.blue.shade50,
                         contentPadding: const EdgeInsets.symmetric(
@@ -196,7 +241,9 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                         leading: Icon(
                           Icons.circle,
                           size: 10,
-                          color: Colors.green,
+                          color: d.reportingEnabled
+                              ? Colors.orange
+                              : Colors.green,
                         ),
                         title: Text(
                           d.listTitle,
@@ -206,17 +253,32 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
                         ),
                         subtitle: Text(
                           [
+                            d.envLabel,
+                            d.reportingEnabled ? '调试中' : '在线',
                             if (d.displayModel != null) d.displayModel!,
                             if (d.displayOs != null) d.displayOs!,
                             if (d.appVersion != null) d.appVersion!,
-                            d.deviceId.length > 12
-                                ? '${d.deviceId.substring(0, 12)}…'
-                                : d.deviceId,
+                            '设备 ${d.deviceId}',
                           ].join(' · '),
                           style: const TextStyle(fontSize: 10),
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        trailing: d.reportingEnabled
+                            ? TextButton(
+                                onPressed: () => controller.closeDebug(d),
+                                child: const Text(
+                                  '关闭',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              )
+                            : TextButton(
+                                onPressed: () => controller.openDebug(d),
+                                child: const Text(
+                                  '打开调试',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              ),
                         onTap: () => controller.selectDevice(d),
                       );
                     });
@@ -686,26 +748,51 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
   }
 
   Future<void> _showSettings(BuildContext context) async {
-    final urlCtrl = TextEditingController(text: controller.baseUrl.value);
-    final tokenCtrl = TextEditingController(text: controller.accessToken.value);
+    final controlUrlCtrl =
+        TextEditingController(text: controller.controlBaseUrl.value);
+    final controlTokenCtrl =
+        TextEditingController(text: controller.controlAccessToken.value);
+    final streamUrlCtrl =
+        TextEditingController(text: controller.streamBaseUrl.value);
+    final streamTokenCtrl =
+        TextEditingController(text: controller.streamAccessToken.value);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('ntfy 设置'),
         content: SizedBox(
           width: 420,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: urlCtrl,
-                decoration: const InputDecoration(labelText: 'Base URL'),
-              ),
-              TextField(
-                controller: tokenCtrl,
-                decoration: const InputDecoration(labelText: 'Access Token'),
-              ),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controlUrlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '在线/指令 Base URL (chat)',
+                  ),
+                ),
+                TextField(
+                  controller: controlTokenCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '在线/指令 Token',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: streamUrlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '日志流 Base URL',
+                  ),
+                ),
+                TextField(
+                  controller: streamTokenCtrl,
+                  decoration: const InputDecoration(
+                    labelText: '日志流 Token',
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -722,8 +809,10 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
     );
     if (ok == true) {
       await controller.saveSettings(
-        url: urlCtrl.text,
-        token: tokenCtrl.text,
+        url: streamUrlCtrl.text,
+        token: streamTokenCtrl.text,
+        controlUrl: controlUrlCtrl.text,
+        controlToken: controlTokenCtrl.text,
       );
     }
   }

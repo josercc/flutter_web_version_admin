@@ -34,6 +34,14 @@ class NtfyDebugClient {
     String? title,
     List<String>? tags,
   }) async {
+    // Match App chat publish: auth must be on the POST URL query
+    // (`?auth=base64(Bearer token)`), same as NtfyMessageManager._createClient.
+    final uri = _root.replace(
+      queryParameters: {
+        ..._root.queryParameters,
+        'auth': _authQueryValue,
+      },
+    );
     final body = <String, dynamic>{
       'topic': topic,
       'message': message,
@@ -42,13 +50,17 @@ class NtfyDebugClient {
       if (tags != null) 'tags': tags,
     };
     final response = await _http.post(
-      _root,
-      headers: {'Content-Type': 'application/json'},
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
       body: jsonEncode(body),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError(
-        'ntfy publish failed ${response.statusCode}: ${response.body}',
+        'ntfy publish failed ${response.statusCode} '
+        'host=${uri.host} topic=$topic: ${response.body}',
       );
     }
   }

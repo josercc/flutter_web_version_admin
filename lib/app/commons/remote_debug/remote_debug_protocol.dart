@@ -1,19 +1,31 @@
 import 'dart:convert';
 
 /// Shared remote-debug protocol (App publisher + desktop subscriber).
+///
+/// Control plane (presence + cmd) → [controlBaseUrl].
+/// Data plane (log/http) → [streamBaseUrl].
 class RemoteDebugProtocol {
+  /// Control plane topics (presence + cmd) on chat host.
   static const String presenceTopic = 'winnerapp_debug_presence';
-  static const String defaultBaseUrl = 'http://119.23.47.1:8385/';
-  /// Default access token (override via SharedPreferences). Prefer local prefs in prod.
-  static const String defaultAccessToken = 'tk_6c0b3ec5cf01uyy46swg86330rqho';
 
-  static const Duration presenceInterval = Duration(seconds: 5);
-  static const Duration presenceTimeout = Duration(seconds: 15);
-  static const Duration keepaliveWatchdog = Duration(seconds: 45);
+  /// Presence + command (chat / 4C8G).
+  static const String controlBaseUrl = 'https://chat.winnerapp.cn/';
+  static const String controlAccessToken = 'tk_a9ya8h278g3b66tc5f32q63vynre8';
+
+  /// Log / HTTP stream (weak host).
+  static const String streamBaseUrl = 'http://119.23.47.1:8385/';
+  static const String streamAccessToken = 'tk_6c0b3ec5cf01uyy46swg86330rqho';
+
+  /// Legacy aliases → stream (data plane).
+  static const String defaultBaseUrl = streamBaseUrl;
+  static const String defaultAccessToken = streamAccessToken;
+
+  static const Duration presenceInterval = Duration(seconds: 10);
+  static const Duration presenceTimeout = Duration(seconds: 30);
+  static const Duration keepaliveWatchdog = Duration(seconds: 90);
   static const int maxMessageBytes = 900 * 1024;
   static const int maxBufferItems = 5000;
 
-  /// HTTP / log item `source` — which runtime produced the event.
   static const String sourceFlutter = 'flutter';
   static const String sourceUnity = 'unity';
 
@@ -32,11 +44,29 @@ class RemoteDebugProtocol {
     return 'winnerapp_debug_anon_${sanitizeTopicPart(deviceId)}';
   }
 
-  /// Admin → client control channel (one topic per device).
   static String commandTopic(String deviceId) =>
       'winnerapp_debug_cmd_${sanitizeTopicPart(deviceId)}';
 
   static const String commandActionRefreshConfig = 'refresh_config';
+  static const String commandActionDebugOn = 'on';
+  static const String commandActionDebugOff = 'off';
+
+  static const String envSit = 'sit';
+  static const String envProd = 'prod';
+
+  static String encodeCompactCommand(String action) =>
+      jsonEncode({'t': 'c', 'a': action});
+
+  static String envLabel(String? env) {
+    switch (env) {
+      case envProd:
+        return '生产';
+      case envSit:
+        return '测试';
+      default:
+        return '未知';
+    }
+  }
 
   static String truncateForNtfy(String value) {
     final bytes = utf8.encode(value);
@@ -109,6 +139,7 @@ class RemoteDebugEnvelope {
     this.deviceInfo = const {},
     this.reportingEnabled,
     this.action,
+    this.env,
   });
 
   final RemoteDebugEnvelopeType type;
@@ -128,7 +159,47 @@ class RemoteDebugEnvelope {
   /// For [RemoteDebugEnvelopeType.command], e.g. [RemoteDebugProtocol.commandActionRefreshConfig].
   final String? action;
 
+  /// Compact env: `sit` | `prod`.
+  final String? env;
+
   factory RemoteDebugEnvelope.fromJson(Map<String, dynamic> json) {
+    // Compact wire: {"t":"p"|"o"|"c","d":"...","u":"...","e":"sit|prod","r":1,"a":"on"|"off"}
+    final compactT = json['t']?.toString();
+    if (compactT == 'p' || compactT == 'o' || compactT == 'c') {
+      final type = switch (compactT) {
+        'o' => RemoteDebugEnvelopeType.offline,
+        'c' => RemoteDebugEnvelopeType.command,
+        _ => RemoteDebugEnvelopeType.presence,
+      };
+      bool? reporting;
+      if (type == RemoteDebugEnvelopeType.presence) {
+        // Missing `r` means not reporting (Admin「调试中」必须与 App 一致).
+        if (json.containsKey('r')) {
+          final raw = json['r'];
+          if (raw is bool) {
+            reporting = raw;
+          } else if (raw is num) {
+            reporting = raw != 0;
+          } else {
+            final s = raw?.toString().toLowerCase();
+            reporting = s == '1' || s == 'true';
+          }
+        } else {
+          reporting = false;
+        }
+      }
+      return RemoteDebugEnvelope(
+        type: type,
+        deviceId: json['d']?.toString() ?? json['deviceId']?.toString() ?? '',
+        userId: json['u']?.toString() ?? json['userId']?.toString(),
+        env: json['e']?.toString() ?? json['env']?.toString(),
+        ts: (json['ts'] as num?)?.toInt() ??
+            DateTime.now().millisecondsSinceEpoch,
+        action: json['a']?.toString() ?? json['action']?.toString(),
+        reportingEnabled: reporting,
+      );
+    }
+
     final type = RemoteDebugEnvelopeType.tryParse(json['type']?.toString()) ??
         RemoteDebugEnvelopeType.log;
     final itemsRaw = json['items'];
@@ -154,17 +225,18 @@ class RemoteDebugEnvelope {
     }
     return RemoteDebugEnvelope(
       type: type,
-      deviceId: json['deviceId']?.toString() ?? '',
-      userId: json['userId']?.toString(),
+      deviceId: json['deviceId']?.toString() ?? json['d']?.toString() ?? '',
+      userId: json['userId']?.toString() ?? json['u']?.toString(),
       launchId: json['launchId']?.toString(),
       appVersion: json['appVersion']?.toString(),
       platform: json['platform']?.toString(),
+      env: json['e']?.toString() ?? json['env']?.toString(),
       ts: (json['ts'] as num?)?.toInt() ??
           DateTime.now().millisecondsSinceEpoch,
       items: items,
       deviceInfo: _parseStringMap(json['deviceInfo']),
       reportingEnabled: reporting,
-      action: json['action']?.toString(),
+      action: json['action']?.toString() ?? json['a']?.toString(),
     );
   }
 
@@ -526,25 +598,36 @@ class DevicePresence {
     required this.deviceId,
     this.userId,
     required this.lastSeen,
+    DateTime? firstSeen,
     this.appVersion,
     this.platform,
     this.launchId,
+    this.env,
     this.online = true,
-    this.reportingEnabled = true,
+    this.reportingEnabled = false,
     Map<String, String>? deviceInfo,
-  }) : deviceInfo = deviceInfo ?? {};
+  })  : firstSeen = firstSeen ?? lastSeen,
+        deviceInfo = deviceInfo ?? {};
 
   final String deviceId;
   String? userId;
+
+  /// First time this device appeared in the online list (stable sort key).
+  DateTime firstSeen;
   DateTime lastSeen;
   String? appVersion;
   String? platform;
   String? launchId;
+
+  /// `sit` | `prod` from compact presence `e`.
+  String? env;
   bool online;
 
-  /// True when device uploads logs/HTTP. Legacy clients without the field stay true.
+  /// True when device uploads logs/HTTP (admin opened debug).
   bool reportingEnabled;
   Map<String, String> deviceInfo;
+
+  String get envLabel => RemoteDebugProtocol.envLabel(env);
 
   String get streamTopic =>
       RemoteDebugProtocol.streamTopic(userId: userId, deviceId: deviceId);

@@ -13,16 +13,28 @@ import '../../../commons/remote_debug/remote_debug_protocol.dart';
 enum NtfyLinkState { disconnected, connecting, connected, reconnecting }
 
 class DeviceDebugController extends GetxController {
-  static const _prefUrl = 'remote_debug_ntfy_url';
-  static const _prefToken = 'remote_debug_ntfy_token';
+  static const _prefControlUrl = 'remote_debug_control_ntfy_url';
+  static const _prefControlToken = 'remote_debug_control_ntfy_token';
+  static const _prefStreamUrl = 'remote_debug_ntfy_url';
+  static const _prefStreamToken = 'remote_debug_ntfy_token';
 
-  final baseUrl = RemoteDebugProtocol.defaultBaseUrl.obs;
-  final accessToken = RemoteDebugProtocol.defaultAccessToken.obs;
+  final controlBaseUrl = RemoteDebugProtocol.controlBaseUrl.obs;
+  final controlAccessToken = RemoteDebugProtocol.controlAccessToken.obs;
+  final streamBaseUrl = RemoteDebugProtocol.streamBaseUrl.obs;
+  final streamAccessToken = RemoteDebugProtocol.streamAccessToken.obs;
+
+  /// Legacy single-url bindings used by settings UI fallbacks.
+  final baseUrl = RemoteDebugProtocol.streamBaseUrl.obs;
+  final accessToken = RemoteDebugProtocol.streamAccessToken.obs;
 
   final linkState = NtfyLinkState.disconnected.obs;
   final statusMessage = ''.obs;
 
   final devices = <String, DevicePresence>{}.obs;
+
+  /// Stable online order: append-only by firstSeen; never reshuffle on heartbeat/login.
+  final onlineOrder = <String>[].obs;
+
   final selectedDeviceId = RxnString();
   final followDeviceId = RxnString();
   final currentStreamTopic = RxnString();
@@ -45,47 +57,54 @@ class DeviceDebugController extends GetxController {
   final listFilterDeviceId = ''.obs;
   final listFilterModel = ''.obs;
 
-  NtfyDebugClient? _client;
+  /// `all` | `sit` | `prod`
+  final listFilterEnv = 'all'.obs;
+
+  NtfyDebugClient? _controlClient;
+  NtfyDebugClient? _streamClient;
   Timer? _presenceSweep;
   Timer? _keepaliveWatch;
   DateTime? _lastNtfyEventAt;
   int _reconnectAttempt = 0;
   bool _disposed = false;
 
-  /// Stable order: logged-in first, then deviceId.
-  /// Avoid sorting by live [DevicePresence.lastSeen] — presence / stream
-  /// refreshes would reshuffle the sidebar on every heartbeat.
-  static int compareDevicesStable(DevicePresence a, DevicePresence b) {
-    final aLogin = a.isLoggedIn ? 0 : 1;
-    final bLogin = b.isLoggedIn ? 0 : 1;
-    if (aLogin != bLogin) return aLogin - bLogin;
-    return a.deviceId.compareTo(b.deviceId);
-  }
+  /// After Admin「打开调试」, ignore heartbeat `r`=false briefly until App applies on.
+  final Map<String, DateTime> _reportingOpenGraceUntil = {};
 
-  List<DevicePresence> _applyListFilters(Iterable<DevicePresence> source) {
+  /// Online devices in first-seen order (stable).
+  List<DevicePresence> get onlineDevices {
     final uid = listFilterUserId.value.trim().toLowerCase();
     final did = listFilterDeviceId.value.trim().toLowerCase();
     final model = listFilterModel.value.trim().toLowerCase();
-    return source.where((d) {
+    final env = listFilterEnv.value;
+    final out = <DevicePresence>[];
+    for (final id in onlineOrder) {
+      final d = devices[id];
+      if (d == null || !d.online) continue;
+      if (env != 'all' && (d.env ?? '') != env) continue;
       if (uid.isNotEmpty) {
         final u = (d.userId ?? '').toLowerCase();
-        if (!u.contains(uid)) return false;
+        if (!u.contains(uid)) continue;
       }
-      if (did.isNotEmpty) {
-        if (!d.deviceId.toLowerCase().contains(did)) return false;
+      if (did.isNotEmpty && !d.deviceId.toLowerCase().contains(did)) {
+        continue;
       }
       if (model.isNotEmpty) {
         final m = (d.displayModel ?? '').toLowerCase();
-        if (!m.contains(model)) return false;
+        if (!m.contains(model)) continue;
       }
-      return true;
-    }).toList()
-      ..sort(compareDevicesStable);
+      out.add(d);
+    }
+    return out;
   }
 
-  List<DevicePresence> get reportingOnlineDevices => _applyListFilters(
-        devices.values.where((d) => d.online && d.reportingEnabled),
-      );
+  /// Online but not currently reporting — avoids duplicating「调试中」rows.
+  List<DevicePresence> get onlineIdleDevices =>
+      onlineDevices.where((d) => !d.reportingEnabled).toList();
+
+  /// Currently sending logs.
+  List<DevicePresence> get reportingOnlineDevices =>
+      onlineDevices.where((d) => d.reportingEnabled).toList();
 
   List<DebugLogEntry> get filteredLogs {
     final q = logFilter.value.trim().toLowerCase();
@@ -131,28 +150,50 @@ class DeviceDebugController extends GetxController {
     _disposed = true;
     _presenceSweep?.cancel();
     _keepaliveWatch?.cancel();
-    _client?.close();
-    _client = null;
+    _controlClient?.close();
+    _controlClient = null;
+    _streamClient?.close();
+    _streamClient = null;
     super.onClose();
   }
 
   Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    baseUrl.value =
-        prefs.getString(_prefUrl) ?? RemoteDebugProtocol.defaultBaseUrl;
-    accessToken.value =
-        prefs.getString(_prefToken) ?? RemoteDebugProtocol.defaultAccessToken;
+    controlBaseUrl.value = prefs.getString(_prefControlUrl) ??
+        RemoteDebugProtocol.controlBaseUrl;
+    controlAccessToken.value = prefs.getString(_prefControlToken) ??
+        RemoteDebugProtocol.controlAccessToken;
+    streamBaseUrl.value =
+        prefs.getString(_prefStreamUrl) ?? RemoteDebugProtocol.streamBaseUrl;
+    streamAccessToken.value = prefs.getString(_prefStreamToken) ??
+        RemoteDebugProtocol.streamAccessToken;
+    baseUrl.value = streamBaseUrl.value;
+    accessToken.value = streamAccessToken.value;
   }
 
   Future<void> saveSettings({
     required String url,
     required String token,
+    String? controlUrl,
+    String? controlToken,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefUrl, url.trim());
-    await prefs.setString(_prefToken, token.trim());
-    baseUrl.value = url.trim();
-    accessToken.value = token.trim();
+    final nextStreamUrl = url.trim();
+    final nextStreamToken = token.trim();
+    final nextControlUrl =
+        (controlUrl ?? controlBaseUrl.value).trim();
+    final nextControlToken =
+        (controlToken ?? controlAccessToken.value).trim();
+    await prefs.setString(_prefStreamUrl, nextStreamUrl);
+    await prefs.setString(_prefStreamToken, nextStreamToken);
+    await prefs.setString(_prefControlUrl, nextControlUrl);
+    await prefs.setString(_prefControlToken, nextControlToken);
+    streamBaseUrl.value = nextStreamUrl;
+    streamAccessToken.value = nextStreamToken;
+    controlBaseUrl.value = nextControlUrl;
+    controlAccessToken.value = nextControlToken;
+    baseUrl.value = nextStreamUrl;
+    accessToken.value = nextStreamToken;
     await connect();
   }
 
@@ -168,15 +209,20 @@ class DeviceDebugController extends GetxController {
 
     _presenceSweep?.cancel();
     _keepaliveWatch?.cancel();
-    _client?.close();
-    _client = NtfyDebugClient(
-      baseUrl: baseUrl.value,
-      accessToken: accessToken.value,
+    _controlClient?.close();
+    _streamClient?.close();
+    _controlClient = NtfyDebugClient(
+      baseUrl: controlBaseUrl.value,
+      accessToken: controlAccessToken.value,
+    );
+    _streamClient = NtfyDebugClient(
+      baseUrl: streamBaseUrl.value,
+      accessToken: streamAccessToken.value,
     );
     _intentionalDisconnect = false;
 
     try {
-      await _client!.subscribe(
+      await _controlClient!.subscribe(
         topic: RemoteDebugProtocol.presenceTopic,
         onMessage: _onNtfyEvent,
         onError: (e) => _onStreamBroken('presence error: $e'),
@@ -185,7 +231,7 @@ class DeviceDebugController extends GetxController {
 
       final topic = currentStreamTopic.value;
       if (topic != null && topic.isNotEmpty) {
-        await _client!.subscribe(
+        await _streamClient!.subscribe(
           topic: topic,
           onMessage: _onNtfyEvent,
           onError: (e) => _onStreamBroken('stream error: $e'),
@@ -194,7 +240,7 @@ class DeviceDebugController extends GetxController {
       }
 
       linkState.value = NtfyLinkState.connected;
-      statusMessage.value = '已连接';
+      statusMessage.value = '已连接（在线=${controlBaseUrl.value}）';
       _reconnectAttempt = 0;
       _lastNtfyEventAt = DateTime.now();
       _presenceSweep = Timer.periodic(
@@ -246,15 +292,30 @@ class DeviceDebugController extends GetxController {
 
   void _sweepPresence() {
     final now = DateTime.now();
-    var changed = false;
+    final expired = <String>[];
     devices.forEach((id, d) {
       if (d.online &&
           now.difference(d.lastSeen) > RemoteDebugProtocol.presenceTimeout) {
-        d.online = false;
-        changed = true;
+        expired.add(id);
       }
     });
-    if (changed) devices.refresh();
+    if (expired.isEmpty) return;
+    for (final id in expired) {
+      _removeDevice(id);
+    }
+  }
+
+  void _removeDevice(String id) {
+    devices.remove(id);
+    onlineOrder.remove(id);
+    if (selectedDeviceId.value == id) {
+      selectedDeviceId.value = null;
+    }
+    if (followDeviceId.value == id) {
+      followDeviceId.value = null;
+    }
+    devices.refresh();
+    onlineOrder.refresh();
   }
 
   void _onNtfyEvent(Map<String, dynamic> raw) {
@@ -297,47 +358,79 @@ class DeviceDebugController extends GetxController {
     final id = envelope.deviceId;
     if (id.isEmpty) return;
 
-    final existing = devices[id];
     if (offline) {
-      if (existing != null) {
-        existing.online = false;
-        existing.lastSeen = DateTime.now();
-        if (envelope.reportingEnabled != null) {
-          existing.reportingEnabled = envelope.reportingEnabled!;
-        }
-        if (envelope.deviceInfo.isNotEmpty) {
-          existing.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
-        }
-        devices[id] = existing;
-      }
+      _removeDevice(id);
       return;
     }
 
-    final presence = existing ??
-        DevicePresence(
-          deviceId: id,
-          lastSeen: DateTime.now(),
-        );
-    presence.userId = envelope.userId;
-    presence.appVersion = envelope.appVersion;
-    presence.platform = envelope.platform;
-    presence.launchId = envelope.launchId;
-    presence.lastSeen = DateTime.now();
-    presence.online = true;
-    // Legacy clients omit the field → keep treating as reporting on.
-    presence.reportingEnabled = envelope.reportingEnabled ?? true;
-    if (envelope.deviceInfo.isNotEmpty) {
-      presence.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
+    final existing = devices[id];
+    final now = DateTime.now();
+    if (existing == null) {
+      final presence = DevicePresence(
+        deviceId: id,
+        userId: envelope.userId,
+        lastSeen: now,
+        firstSeen: now,
+        appVersion: envelope.appVersion,
+        platform: envelope.platform,
+        launchId: envelope.launchId,
+        env: envelope.env,
+        online: true,
+        reportingEnabled: envelope.reportingEnabled ?? false,
+        deviceInfo: envelope.deviceInfo.isNotEmpty
+            ? Map<String, String>.from(envelope.deviceInfo)
+            : null,
+      );
+      devices[id] = presence;
+      onlineOrder.add(id);
+    } else {
+      // Same deviceId: update in place — do not reorder.
+      if (envelope.userId != null) {
+        existing.userId = envelope.userId;
+      }
+      if (envelope.appVersion != null) {
+        existing.appVersion = envelope.appVersion;
+      }
+      if (envelope.platform != null) {
+        existing.platform = envelope.platform;
+      }
+      if (envelope.launchId != null) {
+        existing.launchId = envelope.launchId;
+      }
+      if (envelope.env != null && envelope.env!.isNotEmpty) {
+        existing.env = envelope.env;
+      }
+      existing.lastSeen = now;
+      existing.online = true;
+      if (envelope.reportingEnabled != null) {
+        final graceUntil = _reportingOpenGraceUntil[id];
+        final inGrace =
+            graceUntil != null && now.isBefore(graceUntil);
+        if (envelope.reportingEnabled == true) {
+          existing.reportingEnabled = true;
+          _reportingOpenGraceUntil.remove(id);
+        } else if (!inGrace) {
+          existing.reportingEnabled = false;
+        }
+      }
+      if (envelope.deviceInfo.isNotEmpty) {
+        existing.deviceInfo = Map<String, String>.from(envelope.deviceInfo);
+      }
+      devices[id] = existing;
     }
-    devices[id] = presence;
     devices.refresh();
+    onlineOrder.refresh();
 
-    _maybeFollow(presence);
+    final presence = devices[id];
+    if (presence != null) {
+      _maybeFollow(presence);
+    }
   }
 
   void _maybeFollow(DevicePresence presence) {
     final follow = followDeviceId.value;
     if (follow == null || follow != presence.deviceId) return;
+    if (!presence.reportingEnabled) return;
 
     final topic = presence.streamTopic;
     if (topic == currentStreamTopic.value) return;
@@ -354,18 +447,79 @@ class DeviceDebugController extends GetxController {
     followDeviceId.value = presence.deviceId;
     deviceFilter.value = '';
     if (!presence.reportingEnabled) {
-      statusMessage.value = '该设备未开启上报，无法订阅日志流';
+      statusMessage.value = '调试未打开，可点击「打开调试」';
       return;
     }
     await _subscribeStream(presence.streamTopic);
   }
 
+  Future<void> openDebug(DevicePresence presence) async {
+    selectedDeviceId.value = presence.deviceId;
+    followDeviceId.value = presence.deviceId;
+    try {
+      await _publishCommand(
+        presence.deviceId,
+        RemoteDebugProtocol.commandActionDebugOn,
+      );
+      _reportingOpenGraceUntil[presence.deviceId] =
+          DateTime.now().add(const Duration(seconds: 8));
+      presence.reportingEnabled = true;
+      devices[presence.deviceId] = presence;
+      devices.refresh();
+      statusMessage.value = '已发送打开调试';
+      await _subscribeStream(presence.streamTopic);
+    } catch (e) {
+      statusMessage.value = '打开调试失败: $e';
+    }
+  }
+
+  Future<void> closeDebug(DevicePresence presence) async {
+    try {
+      await _publishCommand(
+        presence.deviceId,
+        RemoteDebugProtocol.commandActionDebugOff,
+      );
+      _reportingOpenGraceUntil.remove(presence.deviceId);
+      presence.reportingEnabled = false;
+      devices[presence.deviceId] = presence;
+      devices.refresh();
+      final topic = currentStreamTopic.value;
+      if (topic != null &&
+          topic == presence.streamTopic &&
+          _streamClient != null) {
+        await _streamClient!.unsubscribe(topic);
+        currentStreamTopic.value = null;
+      }
+      statusMessage.value = '已发送关闭调试';
+    } catch (e) {
+      statusMessage.value = '关闭调试失败: $e';
+    }
+  }
+
+  Future<void> _publishCommand(String deviceId, String action) async {
+    final client = _controlClient;
+    if (client == null) {
+      throw StateError('control ntfy not connected');
+    }
+    final topic = RemoteDebugProtocol.commandTopic(deviceId);
+    statusMessage.value =
+        '发送指令 → ${controlBaseUrl.value} topic=$topic';
+    await client.publish(
+      topic: topic,
+      message: RemoteDebugProtocol.encodeCompactCommand(action),
+      title: action,
+      tags: ['c', action],
+    );
+  }
+
   Future<void> _subscribeStream(String topic) async {
-    final client = _client;
+    final client = _streamClient;
     if (client == null) return;
 
     final old = currentStreamTopic.value;
-    if (old != null && old != topic && old != RemoteDebugProtocol.presenceTopic) {
+    if (old != null &&
+        old != topic &&
+        old != RemoteDebugProtocol.presenceTopic) {
       await client.unsubscribe(old);
     }
     currentStreamTopic.value = topic;
@@ -384,6 +538,14 @@ class DeviceDebugController extends GetxController {
   }
 
   void _handleData(RemoteDebugEnvelope envelope) {
+    if (envelope.deviceId.isNotEmpty) {
+      final existing = devices[envelope.deviceId];
+      if (existing != null && !existing.reportingEnabled) {
+        existing.reportingEnabled = true;
+        devices.refresh();
+      }
+    }
+
     final follow = followDeviceId.value;
     if (follow != null &&
         envelope.deviceId.isNotEmpty &&
