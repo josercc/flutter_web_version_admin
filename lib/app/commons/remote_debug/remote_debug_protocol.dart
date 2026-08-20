@@ -50,12 +50,29 @@ class RemoteDebugProtocol {
   static const String commandActionRefreshConfig = 'refresh_config';
   static const String commandActionDebugOn = 'on';
   static const String commandActionDebugOff = 'off';
+  static const String commandActionListSessions = 'list_sessions';
+  static const String commandActionFetchSession = 'fetch_session';
 
   static const String envSit = 'sit';
   static const String envProd = 'prod';
 
-  static String encodeCompactCommand(String action) =>
-      jsonEncode({'t': 'c', 'a': action});
+  static const Duration sessionFlushInterval = Duration(seconds: 5);
+  static const int sessionFlushItemThreshold = 50;
+  static const int sessionFlushBytesThreshold = 64 * 1024;
+  static const int maxLocalSessions = 10;
+  /// Per-file cap for `logs.ndjson` / `http.ndjson` within one launch.
+  static const int maxSessionFileBytes = 5 * 1024 * 1024;
+
+  static String encodeCompactCommand(
+    String action, {
+    String? sessionId,
+  }) {
+    final map = <String, dynamic>{'t': 'c', 'a': action};
+    if (sessionId != null && sessionId.isNotEmpty) {
+      map['id'] = sessionId;
+    }
+    return jsonEncode(map);
+  }
 
   static String envLabel(String? env) {
     switch (env) {
@@ -102,7 +119,10 @@ enum RemoteDebugEnvelopeType {
   log,
   http,
   batch,
-  command;
+  command,
+  sessionsList,
+  sessionError,
+  sessionZip;
 
   static RemoteDebugEnvelopeType? tryParse(String? raw) {
     switch (raw) {
@@ -118,12 +138,23 @@ enum RemoteDebugEnvelopeType {
         return RemoteDebugEnvelopeType.batch;
       case 'command':
         return RemoteDebugEnvelopeType.command;
+      case 'sessions_list':
+        return RemoteDebugEnvelopeType.sessionsList;
+      case 'session_error':
+        return RemoteDebugEnvelopeType.sessionError;
+      case 'session_zip':
+        return RemoteDebugEnvelopeType.sessionZip;
       default:
         return null;
     }
   }
 
-  String get wire => name;
+  String get wire => switch (this) {
+        RemoteDebugEnvelopeType.sessionsList => 'sessions_list',
+        RemoteDebugEnvelopeType.sessionError => 'session_error',
+        RemoteDebugEnvelopeType.sessionZip => 'session_zip',
+        _ => name,
+      };
 }
 
 class RemoteDebugEnvelope {
@@ -140,6 +171,9 @@ class RemoteDebugEnvelope {
     this.reportingEnabled,
     this.action,
     this.env,
+    this.sessionId,
+    this.error,
+    this.sessionItems = const [],
   });
 
   final RemoteDebugEnvelopeType type;
@@ -161,6 +195,13 @@ class RemoteDebugEnvelope {
 
   /// Compact env: `sit` | `prod`.
   final String? env;
+
+  /// Local session id (launchId) for fetch / zip / error.
+  final String? sessionId;
+  final String? error;
+
+  /// Compact session rows from `sessions_list`.
+  final List<Map<String, dynamic>> sessionItems;
 
   factory RemoteDebugEnvelope.fromJson(Map<String, dynamic> json) {
     // Compact wire: {"t":"p"|"o"|"c","d":"...","u":"...","e":"sit|prod","r":1,"a":"on"|"off"}
@@ -197,6 +238,7 @@ class RemoteDebugEnvelope {
             DateTime.now().millisecondsSinceEpoch,
         action: json['a']?.toString() ?? json['action']?.toString(),
         reportingEnabled: reporting,
+        sessionId: json['id']?.toString() ?? json['sessionId']?.toString(),
       );
     }
 
@@ -237,6 +279,9 @@ class RemoteDebugEnvelope {
       deviceInfo: _parseStringMap(json['deviceInfo']),
       reportingEnabled: reporting,
       action: json['action']?.toString() ?? json['a']?.toString(),
+      sessionId: json['sessionId']?.toString() ?? json['id']?.toString(),
+      error: json['error']?.toString(),
+      sessionItems: type == RemoteDebugEnvelopeType.sessionsList ? items : const [],
     );
   }
 
@@ -263,10 +308,68 @@ class RemoteDebugEnvelope {
         if (deviceInfo.isNotEmpty) 'deviceInfo': deviceInfo,
         if (reportingEnabled != null) 'reportingEnabled': reportingEnabled,
         if (action != null && action!.isNotEmpty) 'action': action,
+        if (sessionId != null && sessionId!.isNotEmpty) 'sessionId': sessionId,
+        if (error != null && error!.isNotEmpty) 'error': error,
       };
 
   String encode() =>
       RemoteDebugProtocol.truncateForNtfy(jsonEncode(toJson()));
+}
+
+/// One local App launch archive (from `sessions_list`).
+class LocalSessionInfo {
+  LocalSessionInfo({
+    required this.id,
+    this.startedAt,
+    this.env,
+    this.logLines = 0,
+    this.httpLines = 0,
+    this.bytes = 0,
+    this.appVersion,
+  });
+
+  final String id;
+  final int? startedAt;
+  final String? env;
+  final int logLines;
+  final int httpLines;
+  final int bytes;
+  final String? appVersion;
+
+  factory LocalSessionInfo.fromJson(Map<String, dynamic> json) {
+    return LocalSessionInfo(
+      id: json['id']?.toString() ?? json['launchId']?.toString() ?? '',
+      startedAt: (json['at'] as num?)?.toInt() ??
+          (json['startedAt'] as num?)?.toInt(),
+      env: json['env']?.toString(),
+      logLines: (json['logs'] as num?)?.toInt() ??
+          (json['logLines'] as num?)?.toInt() ??
+          0,
+      httpLines: (json['http'] as num?)?.toInt() ??
+          (json['httpLines'] as num?)?.toInt() ??
+          0,
+      bytes: (json['bytes'] as num?)?.toInt() ?? 0,
+      appVersion: json['appVersion']?.toString(),
+    );
+  }
+
+  String get startedLabel {
+    final at = startedAt;
+    if (at == null || at <= 0) return '-';
+    final dt = DateTime.fromMillisecondsSinceEpoch(at);
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
+        '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  String get sizeLabel {
+    if (bytes <= 0) return '-';
+    if (bytes < 1024) return '${bytes}B';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    }
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+  }
 }
 
 class DebugLogEntry {

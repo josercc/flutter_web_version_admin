@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../commons/remote_debug/ntfy_debug_client.dart';
@@ -59,6 +61,12 @@ class DeviceDebugController extends GetxController {
 
   /// `all` | `sit` | `prod`
   final listFilterEnv = 'all'.obs;
+
+  /// Local session archives on the selected debugging device.
+  final localSessions = <LocalSessionInfo>[].obs;
+  final localSessionsLoading = false.obs;
+  final localSessionFetchingId = RxnString();
+  final viewingSessionId = RxnString();
 
   NtfyDebugClient? _controlClient;
   NtfyDebugClient? _streamClient;
@@ -325,7 +333,22 @@ class DeviceDebugController extends GetxController {
     if (event != null && event != 'message') return;
 
     final message = raw['message']?.toString();
-    if (message == null || message.isEmpty) return;
+    final attachment = raw['attachment'];
+    Map<String, dynamic>? attachmentMap;
+    if (attachment is Map) {
+      attachmentMap = Map<String, dynamic>.from(attachment);
+    }
+
+    if (message == null || message.isEmpty) {
+      if (attachmentMap != null) {
+        unawaited(_handleSessionAttachment(
+          attachment: attachmentMap,
+          sessionId: null,
+          deviceId: '',
+        ));
+      }
+      return;
+    }
 
     Map<String, dynamic> payload;
     try {
@@ -351,7 +374,207 @@ class DeviceDebugController extends GetxController {
         break;
       case RemoteDebugEnvelopeType.command:
         break;
+      case RemoteDebugEnvelopeType.sessionsList:
+        _handleSessionsList(envelope);
+        break;
+      case RemoteDebugEnvelopeType.sessionError:
+        localSessionsLoading.value = false;
+        localSessionFetchingId.value = null;
+        statusMessage.value =
+            '拉取会话失败: ${envelope.error ?? 'unknown'}';
+        break;
+      case RemoteDebugEnvelopeType.sessionZip:
+        if (attachmentMap != null) {
+          unawaited(_handleSessionAttachment(
+            attachment: attachmentMap,
+            sessionId: envelope.sessionId,
+            deviceId: envelope.deviceId,
+          ));
+        } else {
+          statusMessage.value = '收到 session_zip 但无附件';
+          localSessionFetchingId.value = null;
+        }
+        break;
     }
+  }
+
+  void _handleSessionsList(RemoteDebugEnvelope envelope) {
+    localSessionsLoading.value = false;
+    final rows = <LocalSessionInfo>[];
+    for (final item in envelope.sessionItems.isNotEmpty
+        ? envelope.sessionItems
+        : envelope.items) {
+      final info = LocalSessionInfo.fromJson(item);
+      if (info.id.isNotEmpty) rows.add(info);
+    }
+    localSessions.assignAll(rows);
+    statusMessage.value = '本地会话 ${rows.length} 条';
+  }
+
+  Future<void> refreshLocalSessions() async {
+    final d = selectedDevice;
+    if (d == null) {
+      statusMessage.value = '请先选择设备';
+      return;
+    }
+    if (!d.reportingEnabled) {
+      statusMessage.value = '请先打开调试后再拉本地会话';
+      return;
+    }
+    try {
+      localSessionsLoading.value = true;
+      await _subscribeStream(d.streamTopic);
+      await _publishCommand(
+        d.deviceId,
+        RemoteDebugProtocol.commandActionListSessions,
+      );
+      statusMessage.value = '已请求本地会话列表';
+    } catch (e) {
+      localSessionsLoading.value = false;
+      statusMessage.value = '请求会话列表失败: $e';
+    }
+  }
+
+  Future<void> fetchLocalSession(String sessionId) async {
+    final d = selectedDevice;
+    if (d == null) {
+      statusMessage.value = '请先选择设备';
+      return;
+    }
+    if (!d.reportingEnabled) {
+      statusMessage.value = '请先打开调试后再拉取会话';
+      return;
+    }
+    final id = sessionId.trim();
+    if (id.isEmpty) return;
+    try {
+      localSessionFetchingId.value = id;
+      await _subscribeStream(d.streamTopic);
+      await _publishCommand(
+        d.deviceId,
+        RemoteDebugProtocol.commandActionFetchSession,
+        sessionId: id,
+      );
+      statusMessage.value = '已请求拉取会话 $id';
+    } catch (e) {
+      localSessionFetchingId.value = null;
+      statusMessage.value = '拉取会话失败: $e';
+    }
+  }
+
+  Future<void> _handleSessionAttachment({
+    required Map<String, dynamic> attachment,
+    required String? sessionId,
+    required String deviceId,
+  }) async {
+    final url = attachment['url']?.toString() ?? '';
+    if (url.isEmpty) {
+      localSessionFetchingId.value = null;
+      statusMessage.value = '附件缺少 url';
+      return;
+    }
+    try {
+      statusMessage.value = '正在下载会话附件…';
+      final bytes = await _downloadAttachment(url);
+      await _importSessionZip(
+        bytes,
+        sessionId: sessionId ??
+            attachment['name']?.toString().replaceAll('.zip', '') ??
+            'session',
+        deviceId: deviceId,
+      );
+    } catch (e) {
+      statusMessage.value = '导入会话失败: $e';
+    } finally {
+      localSessionFetchingId.value = null;
+    }
+  }
+
+  Future<List<int>> _downloadAttachment(String url) async {
+    final root = Uri.parse(url);
+    final auth = base64Encode(
+      utf8.encode('Bearer ${streamAccessToken.value}'),
+    );
+    final uri = root.replace(
+      queryParameters: {
+        ...root.queryParameters,
+        'auth': auth,
+      },
+    );
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer ${streamAccessToken.value}',
+      },
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError(
+        'download failed ${response.statusCode}: ${response.body}',
+      );
+    }
+    return response.bodyBytes;
+  }
+
+  Future<void> _importSessionZip(
+    List<int> bytes, {
+    required String sessionId,
+    required String deviceId,
+  }) async {
+    final archive = ZipDecoder().decodeBytes(bytes);
+    final logLines = <String>[];
+    final httpLines = <String>[];
+    for (final file in archive.files) {
+      if (!file.isFile) continue;
+      final name = file.name.split('/').last;
+      final content = utf8.decode(file.content as List<int>, allowMalformed: true);
+      if (name == 'logs.ndjson') {
+        logLines.addAll(
+          content.split('\n').where((e) => e.trim().isNotEmpty),
+        );
+      } else if (name == 'http.ndjson') {
+        httpLines.addAll(
+          content.split('\n').where((e) => e.trim().isNotEmpty),
+        );
+      }
+    }
+
+    clearAll();
+    viewingSessionId.value = sessionId;
+
+    for (final line in logLines.reversed) {
+      try {
+        final decoded = jsonDecode(line);
+        if (decoded is Map) {
+          logs.add(
+            DebugLogEntry.fromItem(
+              Map<String, dynamic>.from(decoded),
+              deviceId: deviceId.isNotEmpty ? deviceId : selectedDeviceId.value,
+            ),
+          );
+        }
+      } catch (_) {}
+    }
+    for (final line in httpLines.reversed) {
+      try {
+        final decoded = jsonDecode(line);
+        if (decoded is Map) {
+          https.add(
+            DebugHttpEntry.fromItem(
+              Map<String, dynamic>.from(decoded),
+              deviceId: deviceId.isNotEmpty ? deviceId : selectedDeviceId.value,
+            ),
+          );
+        }
+      } catch (_) {}
+    }
+    _trim(logs);
+    _trim(https);
+    statusMessage.value =
+        '已导入会话 $sessionId · 日志 ${logs.length} · 请求 ${https.length}';
+  }
+
+  void clearViewingSession() {
+    viewingSessionId.value = null;
   }
 
   void _handlePresence(RemoteDebugEnvelope envelope, {required bool offline}) {
@@ -446,6 +669,8 @@ class DeviceDebugController extends GetxController {
     selectedDeviceId.value = presence.deviceId;
     followDeviceId.value = presence.deviceId;
     deviceFilter.value = '';
+    localSessions.clear();
+    viewingSessionId.value = null;
     if (!presence.reportingEnabled) {
       statusMessage.value = '调试未打开，可点击「打开调试」';
       return;
@@ -496,7 +721,11 @@ class DeviceDebugController extends GetxController {
     }
   }
 
-  Future<void> _publishCommand(String deviceId, String action) async {
+  Future<void> _publishCommand(
+    String deviceId,
+    String action, {
+    String? sessionId,
+  }) async {
     final client = _controlClient;
     if (client == null) {
       throw StateError('control ntfy not connected');
@@ -506,7 +735,10 @@ class DeviceDebugController extends GetxController {
         '发送指令 → ${controlBaseUrl.value} topic=$topic';
     await client.publish(
       topic: topic,
-      message: RemoteDebugProtocol.encodeCompactCommand(action),
+      message: RemoteDebugProtocol.encodeCompactCommand(
+        action,
+        sessionId: sessionId,
+      ),
       title: action,
       tags: ['c', action],
     );
@@ -538,6 +770,10 @@ class DeviceDebugController extends GetxController {
   }
 
   void _handleData(RemoteDebugEnvelope envelope) {
+    if (viewingSessionId.value != null) {
+      // Prefer archive playback; live stream resumes after「退出回放」.
+      return;
+    }
     if (envelope.deviceId.isNotEmpty) {
       final existing = devices[envelope.deviceId];
       if (existing != null && !existing.reportingEnabled) {
@@ -693,6 +929,7 @@ class DeviceDebugController extends GetxController {
   void clearAll() {
     logs.clear();
     https.clear();
+    viewingSessionId.value = null;
   }
 
   Future<void> copyText(String text) async {

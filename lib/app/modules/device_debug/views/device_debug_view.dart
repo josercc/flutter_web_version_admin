@@ -291,13 +291,38 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
 
   Widget _buildTabs() {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Column(
         children: [
+          Obx(() {
+            final sid = controller.viewingSessionId.value;
+            if (sid == null || sid.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            return Material(
+              color: Colors.amber.shade50,
+              child: ListTile(
+                dense: true,
+                leading: const Icon(Icons.archive_outlined, size: 18),
+                title: Text(
+                  '正在查看本地会话 $sid（非实时流）',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                trailing: TextButton(
+                  onPressed: () {
+                    controller.clearAll();
+                    controller.statusMessage.value = '已退出会话回放';
+                  },
+                  child: const Text('退出回放'),
+                ),
+              ),
+            );
+          }),
           const TabBar(
             tabs: [
               Tab(text: '日志'),
               Tab(text: '请求'),
+              Tab(text: '本地会话'),
               Tab(text: '设备信息'),
             ],
           ),
@@ -306,6 +331,7 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
               children: [
                 _buildLogTab(),
                 _buildHttpTab(),
+                _buildLocalSessionsTab(),
                 _buildDeviceInfoTab(),
               ],
             ),
@@ -313,6 +339,96 @@ class DeviceDebugView extends GetView<DeviceDebugController> {
         ],
       ),
     );
+  }
+
+  Widget _buildLocalSessionsTab() {
+    return Obx(() {
+      final d = controller.selectedDevice;
+      if (d == null) {
+        return const Center(child: Text('请先选择左侧设备'));
+      }
+      if (!d.reportingEnabled) {
+        return const Center(child: Text('请先打开调试后再拉取本地会话'));
+      }
+      final loading = controller.localSessionsLoading.value;
+      final fetching = controller.localSessionFetchingId.value;
+      final sessions = controller.localSessions;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '设备本地最近启动归档（最多 ${RemoteDebugProtocol.maxLocalSessions} 次）',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: loading ? null : controller.refreshLocalSessions,
+                  icon: loading
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh, size: 16),
+                  label: Text(loading ? '拉取中…' : '刷新列表'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: sessions.isEmpty
+                ? Center(
+                    child: Text(
+                      loading ? '等待设备返回…' : '暂无会话，点击刷新列表',
+                      style: TextStyle(color: Colors.grey.shade600),
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: sessions.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final s = sessions[index];
+                      final busy = fetching == s.id;
+                      return ListTile(
+                        title: Text(
+                          s.id,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                        subtitle: Text(
+                          [
+                            s.startedLabel,
+                            if (s.env != null && s.env!.isNotEmpty)
+                              RemoteDebugProtocol.envLabel(s.env),
+                            '日志 ${s.logLines}',
+                            '请求 ${s.httpLines}',
+                            s.sizeLabel,
+                            if (s.appVersion != null && s.appVersion!.isNotEmpty)
+                              s.appVersion!,
+                          ].join(' · '),
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        trailing: TextButton(
+                          onPressed: busy || fetching != null
+                              ? null
+                              : () => controller.fetchLocalSession(s.id),
+                          child: Text(busy ? '拉取中…' : '拉取并查看'),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      );
+    });
   }
 
   Widget _buildDeviceInfoTab() {
